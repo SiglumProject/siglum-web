@@ -8,12 +8,10 @@
 import { BusyTeXCompiler, detectEngine } from 'busytex-lazy';
 
 // API endpoint for bundles and WASM
-// In development, use local wrangler dev server (must run with --remote for R2 access)
-// TEMP: Use production API for faster testing (local wrangler --remote adds latency)
-const API_BASE = 'https://siglum-api.vtp-ips.workers.dev';
-// const API_BASE = import.meta.env.DEV
-//   ? 'http://localhost:8787'
-//   : 'https://siglum-api.vtp-ips.workers.dev';
+// In development, use local server (serve-local.ts in siglum-engine)
+const API_BASE = import.meta.env.DEV
+  ? 'http://localhost:8787'
+  : 'https://siglum-api.vtp-ips.workers.dev';
 
 // Workers must be same-origin - serve from /worker.js in public folder
 const WORKER_URL = '/worker.js';
@@ -273,6 +271,12 @@ class CompilerService {
       const engine = options.engine === 'auto' || !options.engine
         ? detectEngine(source)
         : options.engine;
+
+      // XeTeX cannot dump formats with native fonts - skip gracefully
+      if (engine === 'xelatex') {
+        this.log('Format caching not available for XeTeX (native fonts cannot be serialized)');
+        return false;
+      }
 
       this.log('Generating format for ' + engine + '...');
       await this.compiler.generateFormat(source, { engine });
