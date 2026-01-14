@@ -7,12 +7,16 @@
  * - Zoom presets dropdown
  * - Fit-width mode
  * - Text selection
+ * - Memory-optimized for 100+ page documents:
+ *   - Explicit page.cleanup() after rendering
+ *   - Streaming search (doesn't load all pages at once)
+ *   - Page cache with cleanup for off-screen pages
  */
 
 import React, { useState, useRef, useEffect, useCallback } from 'react'
 import { ChevronLeft, ChevronRight, Search, Sun, Moon, ChevronUp, ChevronDown, X, Download } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist'
-import type { TextItem } from 'pdfjs-dist/types/src/display/api'
+import type { TextItem, TextContent } from 'pdfjs-dist/types/src/display/api'
 import './PDFViewer.css'
 
 // Set worker path
@@ -20,6 +24,9 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
   'pdfjs-dist/build/pdf.worker.min.mjs',
   import.meta.url
 ).toString()
+
+// How many pages to keep in cache around current page
+const PAGE_CACHE_SIZE = 3
 
 interface PDFViewerProps {
   pdfUrl?: string
@@ -49,7 +56,7 @@ const ZOOM_PRESETS = [
   { label: '200%', value: 2.0 },
 ]
 
-const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCompiling }) => {
+const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCompile, isCompiling }) => {
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageCount, setPageCount] = useState(0)
@@ -76,10 +83,25 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
   const zoomButtonRef = useRef<HTMLButtonElement>(null)
   const pdfDataCopyRef = useRef<Uint8Array | null>(null) // Keep a copy for download (pdf.js may detach the buffer)
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null) // Track current PDF for cleanup
+  const pageCacheRef = useRef<Map<number, pdfjsLib.PDFPageProxy>>(new Map()) // LRU page cache
+  const searchAbortRef = useRef<AbortController | null>(null) // For cancelling ongoing search
+  const measureCanvasRef = useRef<HTMLCanvasElement | null>(null) // Reusable canvas for text measurement
+  const pixelRatioRef = useRef(window.devicePixelRatio || 1) // Cache pixel ratio (rarely changes)
+  const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null) // For debounced resize
 
   // Cleanup PDF on unmount
   useEffect(() => {
     return () => {
+      // Cancel any ongoing search
+      if (searchAbortRef.current) {
+        searchAbortRef.current.abort()
+      }
+      // Cleanup all cached pages
+      for (const page of pageCacheRef.current.values()) {
+        page.cleanup()
+      }
+      pageCacheRef.current.clear()
+      // Destroy PDF document
       if (pdfRef.current) {
         pdfRef.current.destroy()
         pdfRef.current = null
@@ -112,13 +134,13 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
         let loadingTask: pdfjsLib.PDFDocumentLoadingTask
 
         if (pdfData) {
-          // Keep a copy for download (pdf.js may detach the buffer)
-          // pdfData is already a Uint8Array, but we need our own copy
-          const copy = new Uint8Array(pdfData.length)
-          copy.set(pdfData)
-          pdfDataCopyRef.current = copy
-          // Pass a copy to pdf.js as well since it may detach the buffer
-          loadingTask = pdfjsLib.getDocument({ data: copy.slice() })
+          // Keep the original pdfData reference for download
+          // (it comes from compilation and won't be modified)
+          pdfDataCopyRef.current = pdfData
+          // Create a single copy for pdf.js since it may detach the ArrayBuffer
+          const pdfCopy = new Uint8Array(pdfData.length)
+          pdfCopy.set(pdfData)
+          loadingTask = pdfjsLib.getDocument({ data: pdfCopy })
         } else if (pdfUrl) {
           loadingTask = pdfjsLib.getDocument(pdfUrl)
         } else {
@@ -129,6 +151,11 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
 
         // Destroy previous PDF before setting new one (frees worker)
         if (pdfRef.current) {
+          // Clean up all cached pages first
+          for (const page of pageCacheRef.current.values()) {
+            page.cleanup()
+          }
+          pageCacheRef.current.clear()
           pdfRef.current.destroy()
         }
 
@@ -152,6 +179,37 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
     }
   }, [pdfUrl, pdfData])
 
+  // Get page from cache or load and cache it
+  const getPageCached = useCallback(async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): Promise<pdfjsLib.PDFPageProxy> => {
+    const cache = pageCacheRef.current
+
+    // Return cached page if available
+    if (cache.has(pageNum)) {
+      return cache.get(pageNum)!
+    }
+
+    // Load and cache the page
+    const page = await pdf.getPage(pageNum)
+    cache.set(pageNum, page)
+
+    // Evict pages outside the cache window (LRU-style based on distance from current page)
+    // Keep pages within PAGE_CACHE_SIZE of the current page
+    const pagesToKeep = new Set<number>()
+    for (let i = Math.max(1, pageNum - PAGE_CACHE_SIZE); i <= Math.min(pdf.numPages, pageNum + PAGE_CACHE_SIZE); i++) {
+      pagesToKeep.add(i)
+    }
+
+    // Cleanup pages outside the window
+    for (const [cachedPageNum, cachedPage] of cache) {
+      if (!pagesToKeep.has(cachedPageNum)) {
+        cachedPage.cleanup()
+        cache.delete(cachedPageNum)
+      }
+    }
+
+    return page
+  }, [])
+
   // Render current page
   const renderPage = useCallback(async () => {
     if (!pdf || !canvasRef.current) return
@@ -168,15 +226,15 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
     }
 
     try {
-      const page = await pdf.getPage(currentPage)
+      const page = await getPageCached(pdf, currentPage)
       const viewport = page.getViewport({ scale })
 
       const canvas = canvasRef.current
       const context = canvas.getContext('2d')
       if (!context) return
 
-      // Set canvas size
-      const pixelRatio = window.devicePixelRatio || 1
+      // Set canvas size (use cached pixel ratio - rarely changes)
+      const pixelRatio = pixelRatioRef.current
       canvas.width = viewport.width * pixelRatio
       canvas.height = viewport.height * pixelRatio
       canvas.style.width = `${viewport.width}px`
@@ -193,12 +251,15 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
       })
       await renderTaskRef.current.promise
 
-      // Render text layer for selection
-      await renderTextLayer(page, viewport)
+      // Fetch text content once and reuse for text layer and search highlights
+      const textContent = await page.getTextContent()
 
-      // Render search highlights if there are matches
+      // Render text layer for selection
+      await renderTextLayer(page, viewport, textContent)
+
+      // Render search highlights if there are matches (reuses textContent)
       if (searchMatches.length > 0) {
-        renderSearchHighlights(page, viewport)
+        renderSearchHighlights(textContent, viewport)
       }
     } catch (err: unknown) {
       // Ignore cancelled renders
@@ -206,23 +267,32 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
         console.error('Render error:', err)
       }
     }
-  }, [pdf, currentPage, scale, searchMatches])
+  }, [pdf, currentPage, scale, searchMatches, getPageCached])
+
+  // Get or create the measurement canvas (reused to avoid GC pressure)
+  const getMeasureContext = useCallback((): CanvasRenderingContext2D | null => {
+    if (!measureCanvasRef.current) {
+      measureCanvasRef.current = document.createElement('canvas')
+    }
+    return measureCanvasRef.current.getContext('2d')
+  }, [])
 
   // Render text layer for selection
   // Uses scaleX transform to match text width to PDF bounding box (same approach as pdf.js)
-  const renderTextLayer = async (page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport) => {
+  // Optimized: DocumentFragment for batch DOM insertion, cssText for single style assignment
+  const renderTextLayer = async (_page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport, textContent: TextContent) => {
     if (!textLayerRef.current) return
 
-    const textContent = await page.getTextContent()
     const textLayerDiv = textLayerRef.current
     textLayerDiv.innerHTML = ''
-    textLayerDiv.style.width = `${viewport.width}px`
-    textLayerDiv.style.height = `${viewport.height}px`
+    textLayerDiv.style.cssText = `width:${viewport.width}px;height:${viewport.height}px`
 
-    // Create a canvas context for measuring text
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
+    // Reuse canvas for text measurement (avoids creating new element each render)
+    const ctx = getMeasureContext()
     if (!ctx) return
+
+    // Use DocumentFragment for batch DOM insertion (avoids layout thrash per span)
+    const fragment = document.createDocumentFragment()
 
     textContent.items.forEach((item) => {
       if (!('str' in item) || !item.str) return
@@ -248,37 +318,42 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
 
       // ty is baseline from bottom of page in PDF coords
       // Convert to top-left CSS coords, accounting for ascender (text above baseline)
-      span.style.left = `${tx}px`
-      span.style.top = `${viewport.height - ty - fontSize * 0.3}px`
-      span.style.fontSize = `${fontSize}px`
-      span.style.fontFamily = fontFamily
-      span.style.position = 'absolute'
-      span.style.whiteSpace = 'pre'
-      span.style.pointerEvents = 'auto'
-      span.style.cursor = 'text'
-      span.style.transformOrigin = '0% 0%'
-      span.style.transform = `scaleX(${scaleX})`
+      const top = viewport.height - ty - fontSize * 0.3
 
-      textLayerDiv.appendChild(span)
+      // Single cssText assignment instead of 10 individual style properties
+      // Reduces DOM operations from 10 to 1 per span
+      span.style.cssText = `left:${tx}px;top:${top}px;font-size:${fontSize}px;font-family:${fontFamily};position:absolute;white-space:pre;pointer-events:auto;cursor:text;transform-origin:0% 0%;transform:scaleX(${scaleX})`
+
+      fragment.appendChild(span)
     })
+
+    // Single DOM insertion for all spans (avoids 500+ potential layout thrashes)
+    textLayerDiv.appendChild(fragment)
   }
 
-  // Render search highlights
-  const renderSearchHighlights = async (page: pdfjsLib.PDFPageProxy, viewport: pdfjsLib.PageViewport) => {
+  // Render search highlights - uses textContent passed from renderPage to avoid duplicate fetch
+  // Optimized: DocumentFragment for batch DOM insertion, cssText for single style assignment
+  const renderSearchHighlights = (textContent: TextContent, viewport: pdfjsLib.PageViewport) => {
     if (!highlightLayerRef.current) return
 
     const highlightLayer = highlightLayerRef.current
     highlightLayer.innerHTML = ''
-    highlightLayer.style.width = `${viewport.width}px`
-    highlightLayer.style.height = `${viewport.height}px`
+    highlightLayer.style.cssText = `width:${viewport.width}px;height:${viewport.height}px`
 
-    const textContent = await page.getTextContent()
     const pageMatches = searchMatches.filter(m => m.pageNum === currentPage)
+    if (pageMatches.length === 0) return
+
+    // Pre-compute match indices for O(1) lookup instead of O(n) findIndex per match
+    const matchIndexMap = new Map<string, number>()
+    searchMatches.forEach((m, idx) => {
+      matchIndexMap.set(`${m.pageNum}-${m.itemIndex}-${m.startIndex}`, idx)
+    })
+
+    // Use DocumentFragment for batch DOM insertion
+    const fragment = document.createDocumentFragment()
 
     pageMatches.forEach((match) => {
-      const globalIdx = searchMatches.findIndex(
-        m => m.pageNum === match.pageNum && m.itemIndex === match.itemIndex && m.startIndex === match.startIndex
-      )
+      const globalIdx = matchIndexMap.get(`${match.pageNum}-${match.itemIndex}-${match.startIndex}`) ?? -1
       const isActive = globalIdx === currentMatchIndex
 
       const item = textContent.items[match.itemIndex]
@@ -294,33 +369,35 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
 
       // Approximate position and width
       const charWidth = (textItem.width || fontSize * 0.6) / textItem.str.length
-      const left = tx + match.startIndex * charWidth
-      const width = (match.endIndex - match.startIndex) * charWidth
+      const left = (tx + match.startIndex * charWidth) * scale
+      const top = (viewport.height / scale - ty) * scale - fontSize * scale
+      const width = (match.endIndex - match.startIndex) * charWidth * scale
+      const height = fontSize * scale * 1.2
 
-      highlight.style.position = 'absolute'
-      highlight.style.left = `${left * scale}px`
-      highlight.style.top = `${(viewport.height / scale - ty) * scale - fontSize * scale}px`
-      highlight.style.width = `${width * scale}px`
-      highlight.style.height = `${fontSize * scale * 1.2}px`
+      // Single cssText assignment instead of 5 individual style properties
+      highlight.style.cssText = `position:absolute;left:${left}px;top:${top}px;width:${width}px;height:${height}px`
 
-      highlightLayer.appendChild(highlight)
+      fragment.appendChild(highlight)
     })
+
+    // Single DOM insertion for all highlights
+    highlightLayer.appendChild(fragment)
   }
 
   useEffect(() => {
     renderPage()
   }, [renderPage])
 
-  // Fit width calculation
+  // Fit width calculation - uses page cache to avoid redundant page loads
   const calculateFitWidth = useCallback(async () => {
     if (!pdf || !containerRef.current) return
 
-    const page = await pdf.getPage(1)
+    const page = await getPageCached(pdf, 1)
     const viewport = page.getViewport({ scale: 1 })
     const containerWidth = containerRef.current.clientWidth - 48 // padding
     const optimalScale = containerWidth / viewport.width
     return Math.min(optimalScale, 3) // Cap at 300%
-  }, [pdf])
+  }, [pdf, getPageCached])
 
   // Fit width on initial load - wait for container to have size
   useEffect(() => {
@@ -336,69 +413,118 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
     doFitWidth()
   }, [pdf, fitWidth, calculateFitWidth])
 
-  // Resize handler - always fit to container width
+  // Resize handler - always fit to container width (debounced to avoid layout thrashing)
   useEffect(() => {
     if (!pdf || !containerRef.current) return
 
-    const resizeObserver = new ResizeObserver(async () => {
-      const optimalScale = await calculateFitWidth()
-      if (optimalScale) {
-        // If fitWidth is enabled, always use optimal scale
-        // If not, cap the current scale to not exceed container
-        if (fitWidth) {
-          setScale(optimalScale)
-        } else if (scale > optimalScale) {
-          setScale(optimalScale)
-        }
+    const resizeObserver = new ResizeObserver(() => {
+      // Debounce resize handling to avoid recalculating on every animation frame
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
       }
+
+      resizeTimeoutRef.current = setTimeout(async () => {
+        const optimalScale = await calculateFitWidth()
+        if (optimalScale) {
+          // If fitWidth is enabled, always use optimal scale
+          // If not, cap the current scale to not exceed container
+          if (fitWidth) {
+            setScale(optimalScale)
+          } else if (scale > optimalScale) {
+            setScale(optimalScale)
+          }
+        }
+      }, 100) // 100ms debounce
     })
 
     resizeObserver.observe(containerRef.current)
-    return () => resizeObserver.disconnect()
+    return () => {
+      resizeObserver.disconnect()
+      if (resizeTimeoutRef.current) {
+        clearTimeout(resizeTimeoutRef.current)
+      }
+    }
   }, [pdf, fitWidth, scale, calculateFitWidth])
 
-  // Search functionality
+  // Search functionality - streaming approach for memory efficiency
+  // Processes pages one at a time and cleans up after each to avoid loading all text content at once
   const performSearch = useCallback(async () => {
     if (!pdf || !searchQuery.trim()) {
       setSearchMatches([])
       return
     }
 
+    // Cancel any previous search
+    if (searchAbortRef.current) {
+      searchAbortRef.current.abort()
+    }
+
+    const abortController = new AbortController()
+    searchAbortRef.current = abortController
+
     const matches: SearchMatch[] = []
     const query = searchQuery.toLowerCase()
 
+    // Process pages one at a time (streaming) to avoid memory spike
+    // For 100+ page documents, loading all pages at once would use ~100MB+
     for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
-      const page = await pdf.getPage(pageNum)
-      const textContent = await page.getTextContent()
+      // Check if search was cancelled (user started new search or unmounted)
+      if (abortController.signal.aborted) {
+        return
+      }
 
-      textContent.items.forEach((item, itemIndex) => {
-        if (!('str' in item)) return
-        const text = item.str.toLowerCase()
-        let startIndex = 0
+      try {
+        const page = await pdf.getPage(pageNum)
+        const textContent = await page.getTextContent()
 
-        while (true) {
-          const idx = text.indexOf(query, startIndex)
-          if (idx === -1) break
-
-          matches.push({
-            pageNum,
-            itemIndex,
-            text: item.str.substring(idx, idx + query.length),
-            startIndex: idx,
-            endIndex: idx + query.length,
-          })
-
-          startIndex = idx + 1
+        // Check abort again after async operations
+        if (abortController.signal.aborted) {
+          page.cleanup()
+          return
         }
-      })
+
+        textContent.items.forEach((item, itemIndex) => {
+          if (!('str' in item)) return
+          const text = item.str.toLowerCase()
+          let startIndex = 0
+
+          while (true) {
+            const idx = text.indexOf(query, startIndex)
+            if (idx === -1) break
+
+            matches.push({
+              pageNum,
+              itemIndex,
+              text: item.str.substring(idx, idx + query.length),
+              startIndex: idx,
+              endIndex: idx + query.length,
+            })
+
+            startIndex = idx + 1
+          }
+        })
+
+        // Clean up page if it's not in our render cache window
+        // This prevents search from consuming memory for every page
+        const cache = pageCacheRef.current
+        if (!cache.has(pageNum)) {
+          page.cleanup()
+        }
+      } catch (err) {
+        // If page load fails, continue to next page
+        console.warn(`Search: Failed to load page ${pageNum}:`, err)
+      }
     }
 
-    setSearchMatches(matches)
-    setCurrentMatchIndex(0)
+    // Only update state if search wasn't cancelled
+    if (!abortController.signal.aborted) {
+      setSearchMatches(matches)
+      setCurrentMatchIndex(0)
 
-    // Navigate to first match
-    if (matches.length > 0) {
-      setCurrentPage(matches[0].pageNum)
+      // Navigate to first match
+      if (matches.length > 0) {
+        setCurrentPage(matches[0].pageNum)
+      }
     }
   }, [pdf, searchQuery])
 
@@ -677,6 +803,6 @@ const PDFViewer: React.FC<PDFViewerProps> = ({ pdfUrl, pdfData, onCompile, isCom
       </div>
     </div>
   )
-}
+})
 
 export default PDFViewer

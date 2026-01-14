@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Search, FileText, Plus, RotateCw, HelpCircle, File } from 'lucide-react'
+import { Search, FileText, Plus, RotateCw, HelpCircle, File, BookOpen } from 'lucide-react'
 import type { SearchResult } from '../types/Document'
 import DocumentSearcher from '../services/DocumentSearcher'
 import ProjectSearcher from '../services/ProjectSearcher'
 import type { FileSearchResult } from '../services/ProjectSearcher'
+import citationService, { type CitationItem } from '../services/CitationService'
 import './CommandPalette.css'
 
 interface CommandPaletteProps {
@@ -12,6 +13,7 @@ interface CommandPaletteProps {
   onClose: () => void
   onSelectDocument: (documentId: string) => void
   onSelectFile?: (filePath: string, lineNumber?: number) => void
+  onSelectCitation?: (citation: CitationItem) => void
   onCreateNew: () => void
   onOpenHelp?: () => void
 }
@@ -32,12 +34,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   onClose,
   onSelectDocument,
   onSelectFile,
+  onSelectCitation,
   onCreateNew,
   onOpenHelp
 }) => {
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResult[]>([])
   const [fileResults, setFileResults] = useState<FileSearchResult[]>([])
+  const [citationResults, setCitationResults] = useState<CitationItem[]>([])
   const [commands, setCommands] = useState<Command[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [isSearching, setIsSearching] = useState(false)
@@ -137,13 +141,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       setCommands([])
       setResults(recentResults)
       setFileResults([])
+      setCitationResults([])
       return
     }
 
     setIsSearching(true)
     try {
-      // Search for documents and project files in parallel
-      const [searchResults, projectFileResults] = await Promise.all([
+      // Search for documents, project files, and citations in parallel
+      const [searchResults, projectFileResults, citations] = await Promise.all([
         DocumentSearcher.search(searchQuery, {
           maxResults: 5,
           includeContent: true,
@@ -152,7 +157,10 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
         ProjectSearcher.search(searchQuery, {
           maxResults: 8,
           searchContent: true
-        })
+        }),
+        citationService.isZoteroConnected()
+          ? citationService.search(searchQuery, 5)
+          : Promise.resolve([])
       ])
 
       // Use natural language intent detection
@@ -160,11 +168,13 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
       setResults(searchResults)
       setFileResults(projectFileResults)
+      setCitationResults(citations)
       setCommands(intentBasedCommands)
     } catch (error) {
       console.error('Search error:', error)
       setResults([])
       setFileResults([])
+      setCitationResults([])
       setCommands([])
     } finally {
       setIsSearching(false)
@@ -209,14 +219,14 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Update selected index when results change
   useEffect(() => {
     setSelectedIndex(0)
-  }, [results, fileResults, commands])
+  }, [results, fileResults, citationResults, commands])
 
   // Keyboard navigation
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const totalItems = commands.length + fileResults.length + results.length
+      const totalItems = commands.length + citationResults.length + fileResults.length + results.length
 
       switch (e.key) {
         case 'Escape':
@@ -243,16 +253,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, selectedIndex, commands, fileResults, results, handleClose, onSelectDocument, onSelectFile])
+  }, [isOpen, selectedIndex, commands, citationResults, fileResults, results, handleClose, onSelectDocument, onSelectFile, onSelectCitation])
 
-  // Scroll selected item into view
+  // Scroll selected item into view - using 'instant' to avoid jank
+  // CSS scroll-margin handles the padding, so no layout thrashing
   useEffect(() => {
     if (listRef.current) {
       const selectedElement = listRef.current.children[selectedIndex] as HTMLElement
       if (selectedElement) {
         selectedElement.scrollIntoView({
           block: 'nearest',
-          behavior: 'smooth'
+          behavior: 'instant'
         })
       }
     }
@@ -264,9 +275,17 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (commands[index]) {
         commands[index].action()
       }
-    } else if (index < commands.length + fileResults.length) {
+    } else if (index < commands.length + citationResults.length) {
+      // Citation item clicked
+      const citationIndex = index - commands.length
+      const citation = citationResults[citationIndex]
+      if (citation && onSelectCitation) {
+        onSelectCitation(citation)
+        handleClose()
+      }
+    } else if (index < commands.length + citationResults.length + fileResults.length) {
       // Project file item clicked
-      const fileIndex = index - commands.length
+      const fileIndex = index - commands.length - citationResults.length
       const result = fileResults[fileIndex]
       if (result && onSelectFile) {
         onSelectFile(result.file.path, result.lineNumber)
@@ -274,7 +293,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       }
     } else {
       // Document item clicked
-      const docIndex = index - commands.length - fileResults.length
+      const docIndex = index - commands.length - citationResults.length - fileResults.length
       if (results[docIndex]) {
         onSelectDocument(results[docIndex].document.id)
         handleClose()
@@ -356,12 +375,39 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </div>
                 )}
 
+                {/* Citations Section */}
+                {citationResults.length > 0 && (
+                  <div className="citations-section">
+                    <div className="section-header">Citations</div>
+                    {citationResults.map((citation, index) => {
+                      const itemIndex = commands.length + index
+                      return (
+                        <div
+                          key={citation.key}
+                          className={`command-palette-item citation-item ${itemIndex === selectedIndex ? 'selected' : ''}`}
+                          onClick={() => handleItemClick(itemIndex)}
+                        >
+                          <div className="item-icon">
+                            <BookOpen size={16} />
+                          </div>
+                          <div className="item-content">
+                            <div className="item-title">{citation.title}</div>
+                            <div className="item-subtitle">
+                              {citation.creatorsText}{citation.year ? ` (${citation.year})` : ''} · {citation.citeKey}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
                 {/* Project Files Section */}
                 {fileResults.length > 0 && (
                   <div className="files-section">
                     <div className="section-header">Project Files</div>
                     {fileResults.map((result, index) => {
-                      const itemIndex = commands.length + index
+                      const itemIndex = commands.length + citationResults.length + index
                       return (
                         <div
                           key={result.file.path}
@@ -395,7 +441,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                       {query ? 'Documents' : 'Recent'}
                     </div>
                     {results.map((result, index) => {
-                      const itemIndex = commands.length + fileResults.length + index
+                      const itemIndex = commands.length + citationResults.length + fileResults.length + index
                       return (
                         <div
                           key={result.document.id}
@@ -424,7 +470,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                 )}
 
                 {/* Empty State */}
-                {results.length === 0 && fileResults.length === 0 && commands.length === 0 && (
+                {results.length === 0 && fileResults.length === 0 && citationResults.length === 0 && commands.length === 0 && (
                   <div className="command-palette-empty">
                     {query ? (
                       <div className="empty-with-suggestion">

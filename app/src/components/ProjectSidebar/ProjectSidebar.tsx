@@ -3,7 +3,111 @@ import { ChevronRight, File, FolderClosed, FolderOpen, Plus, FolderPlus, FilePlu
 import type { FileItem } from '../../services/ProjectStore'
 import ProjectStore from '../../services/ProjectStore'
 import GitService, { type GitStatus, type GitConfig } from '../../services/GitService'
+import CitationService, { type ZoteroStatus } from '../../services/CitationService'
+import ZoteroIcon from '../icons/ZoteroIcon'
 import './ProjectSidebar.css'
+
+// ========================================
+// Tree helpers with structural sharing (module-level for zero re-creation cost)
+// Only clones nodes along the path to target, reuses unchanged subtrees
+// ========================================
+
+type IndexPath = number[]
+
+// Optimized: Uses mutable path array, only creates final array on success
+const findIndexPath = (items: FileItem[], id: string): IndexPath | null => {
+  const path: number[] = []
+  const search = (nodes: FileItem[]): boolean => {
+    for (let i = 0; i < nodes.length; i++) {
+      if (nodes[i].id === id) {
+        path.push(i)
+        return true
+      }
+      if (nodes[i].children) {
+        path.push(i)
+        if (search(nodes[i].children!)) return true
+        path.pop()
+      }
+    }
+    return false
+  }
+  return search(items) ? path : null
+}
+
+const getAtPath = (items: FileItem[], path: IndexPath): FileItem | null => {
+  if (path.length === 0) return null
+  let current: FileItem | undefined = items[path[0]]
+  for (let i = 1; i < path.length && current; i++) {
+    current = current.children?.[path[i]]
+  }
+  return current ?? null
+}
+
+const updateAtPath = (
+  items: FileItem[],
+  path: IndexPath,
+  updater: (item: FileItem) => FileItem
+): FileItem[] => {
+  if (path.length === 0) return items
+  const idx = path[0]
+  const newItems = items.slice()
+  if (path.length === 1) {
+    newItems[idx] = updater(items[idx])
+  } else {
+    newItems[idx] = {
+      ...items[idx],
+      children: updateAtPath(items[idx].children || [], path.slice(1), updater)
+    }
+  }
+  return newItems
+}
+
+const removeAtPath = (items: FileItem[], path: IndexPath): FileItem[] => {
+  if (path.length === 0) return items
+  const idx = path[0]
+  if (path.length === 1) {
+    return items.slice(0, idx).concat(items.slice(idx + 1))
+  }
+  const newItems = items.slice()
+  newItems[idx] = {
+    ...items[idx],
+    children: removeAtPath(items[idx].children || [], path.slice(1))
+  }
+  return newItems
+}
+
+const insertAtPath = (
+  items: FileItem[],
+  path: IndexPath,
+  newItem: FileItem
+): FileItem[] => {
+  if (path.length === 0) return items.concat(newItem)
+  const idx = path[0]
+  const newItems = items.slice()
+  if (path.length === 1) {
+    newItems[idx] = {
+      ...items[idx],
+      children: (items[idx].children || []).concat(newItem)
+    }
+  } else {
+    newItems[idx] = {
+      ...items[idx],
+      children: insertAtPath(items[idx].children || [], path.slice(1), newItem)
+    }
+  }
+  return newItems
+}
+
+const computeParentPath = (items: FileItem[], idxPath: IndexPath): string => {
+  let parentPath = ''
+  let current = items
+  for (let i = 0; i < idxPath.length - 1; i++) {
+    const name = current[idxPath[i]].name
+    parentPath = parentPath ? `${parentPath}/${name}` : `/${name}`
+    current = current[idxPath[i]].children || []
+  }
+  return parentPath
+}
 
 interface ProjectSidebarProps {
   isExpanded: boolean
@@ -32,7 +136,7 @@ interface FileTreeItemProps {
   onEditingComplete?: () => void
 }
 
-const FileTreeItem: React.FC<FileTreeItemProps> = ({
+const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   item,
   depth,
   onDelete,
@@ -234,9 +338,18 @@ const FileTreeItem: React.FC<FileTreeItemProps> = ({
       )}
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison for tree item - re-render if selection, drag state, or item changes
+  return (
+    prevProps.item === nextProps.item &&
+    prevProps.depth === nextProps.depth &&
+    prevProps.selectedId === nextProps.selectedId &&
+    prevProps.draggedId === nextProps.draggedId &&
+    prevProps.editingNewId === nextProps.editingNewId
+  )
+})
 
-const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
+const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
   isExpanded,
   onToggle,
   files,
@@ -257,6 +370,14 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
   const [editingNewId, setEditingNewId] = useState<string | null>(null)
   const [showGitSetup, setShowGitSetup] = useState(false)
   const [gitStatus, setGitStatus] = useState<GitStatus>(GitService.getStatus())
+  // Zotero state
+  const [showZoteroSetup, setShowZoteroSetup] = useState(false)
+  const [zoteroStatus, setZoteroStatus] = useState<ZoteroStatus>(CitationService.getZoteroStatus())
+  const [zoteroUserId, setZoteroUserId] = useState('')
+  const [zoteroApiKey, setZoteroApiKey] = useState('')
+  const [isZoteroConnecting, setIsZoteroConnecting] = useState(false)
+  const [zoteroSetupStep, setZoteroSetupStep] = useState<'connect' | 'done'>('connect')
+  const zoteroUserIdInputRef = useRef<HTMLInputElement>(null)
   const [gitConfig, setGitConfig] = useState<Partial<GitConfig>>(() => {
     const saved = GitService.getConfig()
     return saved || {
@@ -286,6 +407,14 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     return unsubscribe
   }, [])
 
+  // Subscribe to Zotero status updates
+  useEffect(() => {
+    const unsubscribe = CitationService.onStatus((status) => {
+      setZoteroStatus(status.zotero)
+    })
+    return unsubscribe
+  }, [])
+
   // Handle trigger from onboarding
   useEffect(() => {
     if (triggerGitConnect && !gitStatus.isConnected) {
@@ -301,11 +430,18 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     }
   }, [showGitSetup, gitStatus.isConnected, setupStep])
 
+  // Track last files received from store to avoid redundant updates
+  const lastStoreFilesRef = useRef<FileItem[] | null>(null)
+
   // Subscribe to ProjectStore changes (from Git sync)
   useEffect(() => {
     const unsubscribe = ProjectStore.subscribe((newFiles) => {
-      // Only update if files are different (from Git)
-      if (JSON.stringify(newFiles) !== JSON.stringify(files)) {
+      // Skip if same reference as last time (common case: our own setFiles call)
+      if (newFiles === lastStoreFilesRef.current) return
+      lastStoreFilesRef.current = newFiles
+
+      // Only update if store has different reference than current props
+      if (newFiles !== files) {
         onFilesChange(newFiles)
       }
     })
@@ -387,6 +523,42 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     setSetupStep('connect')
   }
 
+  // Zotero handlers
+  const handleZoteroConnect = async () => {
+    if (!zoteroUserId.trim() || !zoteroApiKey.trim()) return
+
+    setIsZoteroConnecting(true)
+    try {
+      await CitationService.connectZotero(zoteroUserId.trim(), zoteroApiKey.trim())
+      setZoteroSetupStep('done')
+      setTimeout(() => {
+        setShowZoteroSetup(false)
+        setZoteroSetupStep('connect')
+        setZoteroUserId('')
+        setZoteroApiKey('')
+      }, 1200)
+    } catch (error) {
+      console.error('Zotero connect failed:', error)
+    } finally {
+      setIsZoteroConnecting(false)
+    }
+  }
+
+  const handleZoteroDisconnect = async () => {
+    await CitationService.disconnectZotero()
+    setZoteroSetupStep('connect')
+    setZoteroUserId('')
+    setZoteroApiKey('')
+  }
+
+  const handleZoteroSync = async () => {
+    try {
+      await CitationService.syncZotero()
+    } catch (e) {
+      console.error('Zotero sync failed:', e)
+    }
+  }
+
   const handleSyncNow = async () => {
     await GitService.sync()
   }
@@ -428,107 +600,67 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
     setEditingNewId(newId)
   }
 
+  // ========================================
+  // Tree operations using structural sharing
+  // ========================================
+
   const deleteItem = (id: string) => {
-    const removeFromTree = (items: FileItem[]): FileItem[] => {
-      return items
-        .filter(item => item.id !== id)
-        .map(item => ({
-          ...item,
-          children: item.children ? removeFromTree(item.children) : undefined
-        }))
-    }
-    onFilesChange(removeFromTree(files))
+    const path = findIndexPath(files, id)
+    if (!path) return
+    onFilesChange(removeAtPath(files, path))
   }
 
   const renameItem = (id: string, newName: string) => {
-    const updateInTree = (items: FileItem[], parentPath: string = ''): FileItem[] => {
-      return items.map(item => {
-        if (item.id === id) {
-          const newPath = parentPath ? `${parentPath}/${newName}` : `/${newName}`
-          return { ...item, name: newName, path: newPath }
-        }
-        if (item.children) {
-          const currentPath = parentPath ? `${parentPath}/${item.name}` : `/${item.name}`
-          return { ...item, children: updateInTree(item.children, currentPath) }
-        }
-        return item
-      })
-    }
-    onFilesChange(updateInTree(files))
+    const path = findIndexPath(files, id)
+    if (!path) return
+
+    const parentPath = computeParentPath(files, path)
+    const newFilePath = parentPath ? `${parentPath}/${newName}` : `/${newName}`
+
+    onFilesChange(updateAtPath(files, path, item => ({ ...item, name: newName, path: newFilePath })))
   }
 
   const addChildItem = (parentId: string, type: 'file' | 'folder') => {
-    const name = type === 'folder' ? 'New Folder' : 'untitled.tex'
+    const path = findIndexPath(files, parentId)
+    if (!path) return
 
-    const addToParent = (items: FileItem[], parentPath: string = ''): FileItem[] => {
-      return items.map(item => {
-        const currentPath = parentPath ? `${parentPath}/${item.name}` : `/${item.name}`
-        if (item.id === parentId && item.type === 'folder') {
-          const newItem: FileItem = {
-            id: generateId(),
-            name,
-            path: `${currentPath}/${name}`,
-            type,
-            ...(type === 'folder' ? { children: [] } : {})
-          }
-          return {
-            ...item,
-            children: [...(item.children || []), newItem]
-          }
-        }
-        if (item.children) {
-          return { ...item, children: addToParent(item.children, currentPath) }
-        }
-        return item
-      })
+    const parent = getAtPath(files, path)
+    if (!parent || parent.type !== 'folder') return
+
+    const name = type === 'folder' ? 'New Folder' : 'untitled.tex'
+    const newItem: FileItem = {
+      id: generateId(),
+      name,
+      path: `${parent.path}/${name}`,
+      type,
+      ...(type === 'folder' ? { children: [] } : {})
     }
-    onFilesChange(addToParent(files))
+
+    onFilesChange(insertAtPath(files, path, newItem))
   }
 
   const moveItem = (itemId: string, targetFolderId: string | null) => {
-    // Find the item to move
-    let itemToMove: FileItem | null = null
+    const sourcePath = findIndexPath(files, itemId)
+    if (!sourcePath) return
 
-    const findAndRemove = (items: FileItem[]): FileItem[] => {
-      return items
-        .filter(item => {
-          if (item.id === itemId) {
-            itemToMove = item
-            return false
-          }
-          return true
-        })
-        .map(item => ({
-          ...item,
-          children: item.children ? findAndRemove(item.children) : undefined
-        }))
+    const itemToMove = getAtPath(files, sourcePath)
+    if (!itemToMove) return
+
+    let newFiles = removeAtPath(files, sourcePath)
+
+    if (targetFolderId === null) {
+      newFiles = [...newFiles, itemToMove]
+    } else {
+      const targetPath = findIndexPath(newFiles, targetFolderId)
+      if (!targetPath) return
+
+      const targetFolder = getAtPath(newFiles, targetPath)
+      if (!targetFolder || targetFolder.type !== 'folder') return
+
+      newFiles = insertAtPath(newFiles, targetPath, itemToMove)
     }
 
-    const addToTarget = (items: FileItem[]): FileItem[] => {
-      return items.map(item => {
-        if (item.id === targetFolderId && item.type === 'folder' && itemToMove) {
-          return {
-            ...item,
-            children: [...(item.children || []), itemToMove]
-          }
-        }
-        if (item.children) {
-          return { ...item, children: addToTarget(item.children) }
-        }
-        return item
-      })
-    }
-
-    let newFiles = findAndRemove(files)
-    if (itemToMove) {
-      if (targetFolderId === null) {
-        // Move to root
-        newFiles = [...newFiles, itemToMove]
-      } else {
-        newFiles = addToTarget(newFiles)
-      }
-      onFilesChange(newFiles)
-    }
+    onFilesChange(newFiles)
   }
 
   const handleFileSelect = (file: FileItem) => {
@@ -699,9 +831,13 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
           )}
         </div>
 
-        {/* Git Sync Section */}
-        <div className="sidebar-git-section" ref={gitSetupRef}>
-          {gitStatus.isConnected ? (
+        {/* Integrations Section - unified wrapper */}
+        <div className="sidebar-integrations">
+          <div className="integrations-header">Integrations</div>
+          <div className="integration-items">
+            {/* Git Sync */}
+            <div className="sidebar-git-section" ref={gitSetupRef}>
+              {gitStatus.isConnected ? (
             <div className={`git-connected-inline ${showGitSetup ? 'expanded' : ''}`}>
               <button
                 className={`git-status-btn ${gitStatus.isSyncing ? 'syncing' : ''}`}
@@ -916,9 +1052,113 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = ({
             </div>
           )}
         </div>
+
+        {/* Zotero Section */}
+        <div className="sidebar-zotero-section">
+          {zoteroStatus.connected ? (
+            <div className={`zotero-connected-inline ${showZoteroSetup ? 'expanded' : ''}`}>
+              <button
+                className="zotero-status-btn"
+                onClick={() => setShowZoteroSetup(!showZoteroSetup)}
+              >
+                <div className="zotero-status-info">
+                  <ZoteroIcon size={14} />
+                  <span className="zotero-status-text">
+                    Zotero ({zoteroStatus.itemCount} cached)
+                  </span>
+                </div>
+                <ChevronRight size={12} className={`zotero-setup-chevron ${showZoteroSetup ? 'open' : ''}`} />
+              </button>
+
+              <div className="zotero-settings-content">
+                <div className="zotero-settings-inner">
+                  <div className="zotero-setting-row">
+                    <span className="zotero-setting-label">User ID</span>
+                    <span className="zotero-setting-value">{zoteroStatus.userId}</span>
+                  </div>
+                  <div className="zotero-actions-row">
+                    <button
+                      className="zotero-sync-btn"
+                      onClick={handleZoteroSync}
+                      disabled={zoteroStatus.syncing}
+                    >
+                      <RefreshCw size={12} className={zoteroStatus.syncing ? 'zotero-sync-spinner' : ''} />
+                      {zoteroStatus.syncing ? 'Syncing...' : 'Sync now'}
+                    </button>
+                    <button className="zotero-disconnect-btn" onClick={handleZoteroDisconnect}>
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className={`zotero-setup-inline ${showZoteroSetup ? 'expanded' : ''}`}>
+              <button className="zotero-setup-btn" onClick={() => setShowZoteroSetup(!showZoteroSetup)}>
+                <ZoteroIcon size={14} />
+                <span>Connect Zotero</span>
+                <ChevronRight size={12} className={`zotero-setup-chevron ${showZoteroSetup ? 'open' : ''}`} />
+              </button>
+
+              <div className="zotero-setup-content">
+                {zoteroSetupStep === 'connect' && (
+                  <div className="zotero-config-form">
+                    <input
+                      ref={zoteroUserIdInputRef}
+                      type="text"
+                      className="zotero-input"
+                      placeholder="User ID (from zotero.org/settings/keys)"
+                      value={zoteroUserId}
+                      onChange={(e) => setZoteroUserId(e.target.value)}
+                    />
+                    <input
+                      type="password"
+                      className="zotero-input"
+                      placeholder="API Key"
+                      value={zoteroApiKey}
+                      onChange={(e) => setZoteroApiKey(e.target.value)}
+                    />
+                    <a
+                      href="https://www.zotero.org/settings/keys/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="zotero-key-link"
+                    >
+                      Get API key from Zotero
+                    </a>
+                    <button
+                      className="zotero-connect-btn"
+                      onClick={handleZoteroConnect}
+                      disabled={!zoteroUserId.trim() || !zoteroApiKey.trim() || isZoteroConnecting}
+                    >
+                      {isZoteroConnecting ? 'Connecting...' : 'Connect'}
+                    </button>
+                  </div>
+                )}
+
+                {zoteroSetupStep === 'done' && (
+                  <div className="zotero-setup-done">
+                    <Check size={20} className="zotero-check-icon" />
+                    <span>Connected</span>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+        </div>{/* integration-items */}
+        </div>{/* sidebar-integrations */}
       </div>
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Re-render only when significant props change
+  return (
+    prevProps.isExpanded === nextProps.isExpanded &&
+    prevProps.files === nextProps.files &&
+    prevProps.selectedFileId === nextProps.selectedFileId &&
+    prevProps.triggerGitConnect === nextProps.triggerGitConnect
+  )
+})
 
 export default ProjectSidebar

@@ -10,6 +10,9 @@ import { latex, latexLinter } from 'codemirror-lang-latex'
 import { Settings, Play, Menu } from 'lucide-react'
 import DocumentManager from '../../services/DocumentManager'
 import CompilerService from '../../services/CompilerService'
+import EventBus from '../../services/EventBus'
+import CitationPopover from '../CitationPopover'
+import stateStore from '../../services/StateStore'
 import './LaTeXEditor.css'
 
 interface LaTeXEditorProps {
@@ -17,6 +20,7 @@ interface LaTeXEditorProps {
   onChange: (value: string) => void
   onSelectionChange?: (start: number, end: number, selectedText: string) => void
   onMenuClick?: () => void
+  documentId?: string
   compilerSettings?: CompilerSettings
   onCompilerSettingsChange?: (settings: CompilerSettings) => void
   compileStatus?: CompileStatusType
@@ -184,11 +188,12 @@ const desertHighlightStyle = HighlightStyle.define([
   { tag: tags.variableName, color: '#c9956e' },
 ])
 
-const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
+const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
   value,
   onChange,
   onSelectionChange,
   onMenuClick,
+  documentId,
   compilerSettings: externalSettings,
   onCompilerSettingsChange,
   compileStatus = 'idle',
@@ -209,6 +214,13 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
   const [sections, setSections] = useState<{ level: number; title: string; line: number }[]>([])
   const [showCompilerSettings, setShowCompilerSettings] = useState(false)
 
+  // Citation popover state
+  const [citationPopoverOpen, setCitationPopoverOpen] = useState(false)
+  const [citationPopoverPos, setCitationPopoverPos] = useState({ top: 0, left: 0 })
+  const citationInsertPosRef = useRef<number>(0)
+  // Track if user dismissed the popover (via Escape) to prevent re-opening
+  const citationDismissedRef = useRef(false)
+
   // Use external settings if provided, otherwise use local state
   const [localSettings, setLocalSettings] = useState<CompilerSettings>({
     autoCompile: true,
@@ -225,10 +237,21 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
   // Track if we're updating value from external source
   const isExternalUpdate = useRef(false)
 
+  // Ref for documentId to avoid stale closure in updateListener
+  const documentIdRef = useRef(documentId)
+  useEffect(() => {
+    documentIdRef.current = documentId
+  }, [documentId])
+
+  // Track which document we've restored cursor for (to avoid duplicate restores)
+  const restoredCursorForDoc = useRef<string | null>(null)
+
   // Compartment for dynamic configuration
   const readOnlyCompartment = useMemo(() => new Compartment(), [])
 
-  // Subscribe to compiler logs
+  // Subscribe to compiler logs with truncation to prevent memory leak
+  // Keep max 500 logs to bound memory usage
+  const MAX_LOGS = 500
   useEffect(() => {
     const unsubscribe = CompilerService.onLog((message) => {
       const now = new Date()
@@ -237,7 +260,14 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
         : message.toLowerCase().includes('warning') ? 'warning'
         : message.toLowerCase().includes('success') ? 'success'
         : 'info'
-      setLogs(prev => [...prev, { time, type, message }])
+      setLogs(prev => {
+        const newLogs = [...prev, { time, type, message }]
+        // Truncate if exceeding max - keep newest logs
+        if (newLogs.length > MAX_LOGS) {
+          return newLogs.slice(-MAX_LOGS)
+        }
+        return newLogs
+      })
     })
     return unsubscribe
   }, [])
@@ -246,6 +276,28 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
   useEffect(() => {
     if (compileStatus === 'compiling') setLogs([])
   }, [compileStatus])
+
+  // Reset cursor restoration tracking when document changes
+  useEffect(() => {
+    // When switching documents, allow cursor restoration for the new document
+    if (documentId && restoredCursorForDoc.current !== documentId) {
+      restoredCursorForDoc.current = null
+    }
+  }, [documentId])
+
+  // Save cursor position when selection changes
+  const saveCursorPosition = useCallback((start: number, end: number) => {
+    if (documentId) {
+      stateStore.setCursorPosition(documentId, start, end)
+    }
+  }, [documentId])
+
+  // Save scroll position when scrolling
+  const saveScrollPosition = useCallback((scrollTop: number, scrollLeft: number) => {
+    if (documentId) {
+      stateStore.setScrollPosition(documentId, scrollTop, scrollLeft)
+    }
+  }, [documentId])
 
   // Create editor on mount
   useEffect(() => {
@@ -257,13 +309,49 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
         onChange(newValue)
       }
 
-      if (update.selectionSet && onSelectionChange) {
+      if (update.selectionSet) {
         const selection = update.state.selection.main
         const selectedText = update.state.sliceDoc(selection.from, selection.to)
-        onSelectionChange(selection.from, selection.to, selectedText)
+        if (onSelectionChange) {
+          onSelectionChange(selection.from, selection.to, selectedText)
+        }
 
-        // Save cursor position
+        // Save cursor position to DocumentManager (legacy)
         DocumentManager.setCursorPosition({ start: selection.from, end: selection.to })
+
+        // Save cursor position to StateStore (uses ref to avoid stale closure)
+        if (documentIdRef.current) {
+          stateStore.setCursorPosition(documentIdRef.current, selection.from, selection.to)
+        }
+      }
+
+      // Detect \cite{ pattern for citation popover (only on doc changes, not cursor movement)
+      if (update.docChanged) {
+        const pos = update.state.selection.main.head
+        const doc = update.state.doc.toString()
+        // Look back up to 20 chars to find \cite{ or \citep{ or \citet{ etc
+        const lookback = doc.slice(Math.max(0, pos - 20), pos)
+        const citeMatch = lookback.match(/\\cite[pt]?\{([^}]*)$/)
+
+        if (citeMatch) {
+          // We're inside a cite command - show popover (unless dismissed)
+          if (!citationDismissedRef.current) {
+            const coords = update.view.coordsAtPos(pos)
+            if (coords) {
+              setCitationPopoverPos({
+                top: coords.bottom + 4,
+                left: coords.left
+              })
+              citationInsertPosRef.current = pos
+              setCitationPopoverOpen(true)
+            }
+          }
+        } else {
+          // Close popover and reset dismissed state when leaving cite context
+          setCitationPopoverOpen(false)
+          citationDismissedRef.current = false
+        }
+
       }
     })
 
@@ -273,7 +361,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
       {
         key: 'Mod-k',
         run: () => {
-          window.dispatchEvent(new CustomEvent('toggleCommandPalette'))
+          EventBus.emit('toggleCommandPalette')
           return true
         },
       },
@@ -281,7 +369,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
       {
         key: 'Mod-Shift-k',
         run: () => {
-          window.dispatchEvent(new CustomEvent('toggleCommandPalette'))
+          EventBus.emit('toggleCommandPalette')
           return true
         },
       },
@@ -289,7 +377,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
       {
         key: 'Mod-Shift-f',
         run: () => {
-          window.dispatchEvent(new CustomEvent('toggleCommandPalette'))
+          EventBus.emit('toggleCommandPalette')
           return true
         },
       },
@@ -297,7 +385,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
       {
         key: 'Mod-s',
         run: () => {
-          window.dispatchEvent(new CustomEvent('triggerCompile'))
+          EventBus.emit('triggerCompile')
           return true
         },
       },
@@ -437,19 +525,82 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
     const view = editorViewRef.current
     if (!view) return
 
-    const currentValue = view.state.doc.toString()
-    if (currentValue !== value) {
+    // Optimization: Check length first to avoid O(n) string comparison on every keystroke
+    // For large documents (thousands of lines), this skips creating a full string copy
+    // when the length already differs (common case: adding/deleting text)
+    const currentLength = view.state.doc.length
+    if (currentLength !== value.length) {
+      // Length differs, definitely need to update
       isExternalUpdate.current = true
       view.dispatch({
-        changes: {
-          from: 0,
-          to: currentValue.length,
-          insert: value,
-        },
+        changes: { from: 0, to: currentLength, insert: value },
       })
       isExternalUpdate.current = false
+    } else if (currentLength > 0) {
+      // Same length - need full comparison (rare case: character replacement)
+      // Only create string copy when absolutely necessary
+      const currentValue = view.state.doc.toString()
+      if (currentValue !== value) {
+        isExternalUpdate.current = true
+        view.dispatch({
+          changes: { from: 0, to: currentLength, insert: value },
+        })
+        isExternalUpdate.current = false
+      }
+    }
+
+    // Restore cursor/scroll position AFTER content is loaded (once per document)
+    const docId = documentIdRef.current
+    if (docId && value.length > 0 && restoredCursorForDoc.current !== docId) {
+      restoredCursorForDoc.current = docId
+
+      stateStore.getDocumentState(docId).then(state => {
+        if (!state || !editorViewRef.current) return
+
+        const currentView = editorViewRef.current
+        const docLength = currentView.state.doc.length
+
+        // Restore cursor position (clamp to document length)
+        const cursorStart = Math.min(state.cursorStart, docLength)
+        const cursorEnd = Math.min(state.cursorEnd, docLength)
+
+        // Only restore if there's a meaningful saved position
+        if (cursorStart > 0 || cursorEnd > 0) {
+          currentView.dispatch({
+            selection: { anchor: cursorStart, head: cursorEnd }
+          })
+        }
+
+        // Restore scroll position
+        if (state.scrollTop > 0 || state.scrollLeft > 0) {
+          currentView.scrollDOM.scrollTop = state.scrollTop
+          currentView.scrollDOM.scrollLeft = state.scrollLeft
+        }
+      })
     }
   }, [value])
+
+  // Set up scroll event listener for state persistence
+  useEffect(() => {
+    const view = editorViewRef.current
+    if (!view || !documentId) return
+
+    let scrollTimeout: number | null = null
+    const handleScroll = () => {
+      // Debounce scroll saves to avoid excessive writes
+      if (scrollTimeout) clearTimeout(scrollTimeout)
+      scrollTimeout = window.setTimeout(() => {
+        const { scrollTop, scrollLeft } = view.scrollDOM
+        saveScrollPosition(scrollTop, scrollLeft)
+      }, 200)
+    }
+
+    view.scrollDOM.addEventListener('scroll', handleScroll, { passive: true })
+    return () => {
+      view.scrollDOM.removeEventListener('scroll', handleScroll)
+      if (scrollTimeout) clearTimeout(scrollTimeout)
+    }
+  }, [documentId, saveScrollPosition])
 
   // Listen for goToLine events from search results
   useEffect(() => {
@@ -470,6 +621,21 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
 
     window.addEventListener('goToLine', handleGoToLine as EventListener)
     return () => window.removeEventListener('goToLine', handleGoToLine as EventListener)
+  }, [])
+
+  // Listen for insertText events from CommandPalette citation selection
+  useEffect(() => {
+    return EventBus.on('insertText', ({ text }) => {
+      const view = editorViewRef.current
+      if (!view) return
+
+      const pos = view.state.selection.main.head
+      view.dispatch({
+        changes: { from: pos, to: pos, insert: text },
+        selection: { anchor: pos + text.length }
+      })
+      view.focus()
+    })
   }, [])
 
   // Helper to wrap selection
@@ -493,11 +659,11 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
   }, [])
 
   const handleCommandPalette = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('toggleCommandPalette'))
+    EventBus.emit('toggleCommandPalette')
   }, [])
 
   const handleHelp = useCallback(() => {
-    window.dispatchEvent(new CustomEvent('toggleHelp'))
+    EventBus.emit('toggleHelp')
   }, [])
 
   const handleClearLogs = useCallback(() => {
@@ -509,6 +675,30 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
     navigator.clipboard.writeText(logText)
   }, [logs])
 
+  // Handle citation insertion from popover
+  const handleCitationInsert = useCallback((citeKey: string, _bibtex: string) => {
+    const view = editorViewRef.current
+    if (!view) return
+
+    const pos = citationInsertPosRef.current
+    // Insert the cite key and close the brace
+    view.dispatch({
+      changes: { from: pos, to: pos, insert: `${citeKey}}` },
+      selection: { anchor: pos + citeKey.length + 1 }
+    })
+    setCitationPopoverOpen(false)
+    // Reset dismissed flag after the call stack completes (after onClose runs)
+    // This ensures future citations will trigger the popover
+    setTimeout(() => {
+      citationDismissedRef.current = false
+    }, 0)
+    view.focus()
+  }, [])
+
+  // Use RAF to debounce resize updates - prevents layout thrashing
+  const pendingHeightRef = useRef<number | null>(null)
+  const rafIdRef = useRef<number | null>(null)
+
   const handleConsoleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
     isResizingRef.current = true
@@ -519,11 +709,30 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
       if (!isResizingRef.current) return
       const delta = startY - e.clientY
       const newHeight = Math.max(100, Math.min(600, startHeight + delta))
-      setConsoleHeight(newHeight)
+
+      // Store pending height and schedule RAF update
+      pendingHeightRef.current = newHeight
+      if (rafIdRef.current === null) {
+        rafIdRef.current = requestAnimationFrame(() => {
+          if (pendingHeightRef.current !== null) {
+            setConsoleHeight(pendingHeightRef.current)
+          }
+          rafIdRef.current = null
+        })
+      }
     }
 
     const handleMouseUp = () => {
       isResizingRef.current = false
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current)
+        rafIdRef.current = null
+      }
+      // Apply final height
+      if (pendingHeightRef.current !== null) {
+        setConsoleHeight(pendingHeightRef.current)
+        pendingHeightRef.current = null
+      }
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
@@ -587,10 +796,13 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
     return results
   }, [])
 
-  // Update sections when content changes
+  // Update sections when content changes (debounced to avoid parsing on every keystroke)
   useEffect(() => {
-    const newSections = parseSections(value)
-    setSections(newSections)
+    const timeoutId = setTimeout(() => {
+      const newSections = parseSections(value)
+      setSections(newSections)
+    }, 300)
+    return () => clearTimeout(timeoutId)
   }, [value, parseSections])
 
   // Jump to section
@@ -796,8 +1008,30 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = ({
           </div>
         </div>
       )}
+
+      <CitationPopover
+        isOpen={citationPopoverOpen}
+        position={citationPopoverPos}
+        onClose={() => {
+          setCitationPopoverOpen(false)
+          citationDismissedRef.current = true
+        }}
+        onInsert={handleCitationInsert}
+      />
     </div>
   )
-}
+}, (prevProps, nextProps) => {
+  // Custom comparison - only re-render when significant props change
+  return (
+    prevProps.value === nextProps.value &&
+    prevProps.compileStatus === nextProps.compileStatus &&
+    prevProps.compileTimeMs === nextProps.compileTimeMs &&
+    prevProps.compilerSettings?.autoCompile === nextProps.compilerSettings?.autoCompile &&
+    prevProps.compilerSettings?.compiler === nextProps.compilerSettings?.compiler &&
+    prevProps.compilerSettings?.ctanFetch === nextProps.compilerSettings?.ctanFetch &&
+    prevProps.compilerSettings?.cachePreamble === nextProps.compilerSettings?.cachePreamble &&
+    prevProps.compilerSettings?.autoUnload === nextProps.compilerSettings?.autoUnload
+  )
+})
 
 export default LaTeXEditor

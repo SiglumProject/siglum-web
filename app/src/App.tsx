@@ -4,19 +4,23 @@ import type { ImperativePanelHandle } from 'react-resizable-panels'
 import CommandPalette from './components/CommandPalette'
 import LaTeXEditor from './components/LaTeXEditor/LaTeXEditor'
 import EmptyState from './components/EmptyState'
-
-// Lazy load PDF viewer - only loads when preview is shown
-const PDFViewer = lazy(() => import('./components/PDFViewer'))
-import DocumentationModal from './components/DocumentationModal'
-import ProjectSidebar from './components/ProjectSidebar'
-import Onboarding from './components/Onboarding/Onboarding'
 import type { FileItem } from './components/ProjectSidebar'
+import type { CitationItem } from './services/CitationService'
+
+// Lazy load heavy components - only loads when needed
+const PDFViewer = lazy(() => import('./components/PDFViewer'))
+const DocumentationModal = lazy(() => import('./components/DocumentationModal'))
+const ProjectSidebar = lazy(() => import('./components/ProjectSidebar'))
+const Onboarding = lazy(() => import('./components/Onboarding/Onboarding'))
 import { useDocument } from './hooks/useDocument'
 import { useAutoSave } from './hooks/useAutoSave'
+import { useCompilation } from './hooks/useCompilation'
+import { useModals } from './hooks/useModals'
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import DocumentManager from './services/DocumentManager'
 import GitService from './services/GitService'
-import CompilerService from './services/CompilerService'
-import type { CompileStatus } from './services/CompilerService'
+import EventBus from './services/EventBus'
+import { useEventBus } from './hooks/useEventBus'
 import './App.css'
 
 // Make DocumentManager available globally in development
@@ -31,33 +35,11 @@ const App: React.FC = () => {
   const [showDesktopPreview, setShowDesktopPreview] = useState(true)
   const [isLoaded, setIsLoaded] = useState(false)
   const [touchStart, setTouchStart] = useState({ x: 0, y: 0 })
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
-
-  // Compiler state
-  const [pdfData, setPdfData] = useState<Uint8Array | null>(null)
-  const [compileStatus, setCompileStatus] = useState<CompileStatus>('idle')
-  const [compileTimeMs, setCompileTimeMs] = useState<number | null>(null)
-  const compileTimeoutRef = useRef<number | null>(null)
-
-  // Compiler settings (shared with editor)
-  const [compilerSettings, setCompilerSettings] = useState({
-    autoCompile: true,
-    compiler: 'auto' as 'auto' | 'pdflatex' | 'xelatex',
-    ctanFetch: true,
-    cachePreamble: true,
-    autoUnload: true,
-  })
-  
-  const [isClosingCommandPalette, setIsClosingCommandPalette] = useState(false)
-  const [showDocumentation, setShowDocumentation] = useState(false)
-  const [isClosingDocumentation, setIsClosingDocumentation] = useState(false)
-  const [documentationOpenedFromPalette, setDocumentationOpenedFromPalette] = useState(false)
   const [sidebarExpanded, setSidebarExpanded] = useState(() => {
     const saved = localStorage.getItem('siglum-sidebar-expanded')
     return saved === 'true'
   })
   const [projectFiles, setProjectFiles] = useState<FileItem[]>(() => {
-    // Load from localStorage on init
     const saved = localStorage.getItem('siglum-project-files')
     return saved ? JSON.parse(saved) : []
   })
@@ -70,6 +52,96 @@ const App: React.FC = () => {
   const [showConflictModal, setShowConflictModal] = useState(false)
   const editorPanelRef = useRef<ImperativePanelHandle>(null)
   const previewPanelRef = useRef<ImperativePanelHandle>(null)
+
+  // Compilation state from hook
+  const {
+    pdfData,
+    compileStatus,
+    compileTimeMs,
+    compilerSettings,
+    setCompilerSettings,
+    compile,
+    compileRef,
+    autoCompileRef,
+    clearPendingAutoCompile,
+  } = useCompilation(latexCode, isLoaded)
+
+  // Modal state from hook
+  const {
+    showCommandPalette,
+    isClosingCommandPalette,
+    showDocumentation,
+    isClosingDocumentation,
+    documentationOpenedFromPalette,
+    openCommandPalette,
+    closeCommandPalette,
+    openDocumentation,
+    closeDocumentation,
+    backFromDocumentation,
+    setShowCommandPalette,
+  } = useModals()
+
+  // Memoized callbacks for keyboard shortcuts
+  const handleCloseCurrentDocument = useCallback(async () => {
+    const recentDocs = DocumentManager.getRecentDocuments()
+    if (recentDocs.length > 1) {
+      await loadDocument(recentDocs[1].id)
+    } else {
+      await createNewDocument()
+    }
+  }, [loadDocument, createNewDocument])
+
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarExpanded(prev => !prev)
+  }, [])
+
+  const handleExpandSidebar = useCallback(() => {
+    setSidebarExpanded(true)
+  }, [])
+
+  const handleCollapseSidebar = useCallback(() => {
+    setSidebarExpanded(false)
+  }, [])
+
+  const handleCloseCommandPaletteModal = useCallback(() => {
+    setShowCommandPalette(false)
+  }, [])
+
+  const handleOpenCommandPaletteModal = useCallback(() => {
+    setShowCommandPalette(true)
+  }, [])
+
+  const handleGitConnectTriggered = useCallback(() => {
+    setTriggerGitConnect(false)
+  }, [])
+
+  const handleOnboardingComplete = useCallback(() => {
+    setShowOnboarding(false)
+  }, [])
+
+  const handleConnectGithub = useCallback(() => {
+    setTriggerGitConnect(true)
+    setSidebarExpanded(true)
+  }, [])
+
+  // Keyboard shortcuts hook
+  useKeyboardShortcuts({
+    showCommandPalette,
+    showDesktopPreview,
+    showDocumentation,
+    onOpenCommandPalette: openCommandPalette,
+    onCloseCommandPalette: closeCommandPalette,
+    onOpenDocumentation: openDocumentation,
+    onCloseDocumentation: closeDocumentation,
+    onCreateNewDocument: createNewDocument,
+    onCloseCurrentDocument: handleCloseCurrentDocument,
+    onToggleSidebar: handleToggleSidebar,
+    onSetLatexCode: setLatexCode,
+    setShowDesktopPreview,
+    setShowPreview,
+    editorPanelRef,
+    previewPanelRef,
+  })
 
   // Sync local state with current document and update browser title
   useEffect(() => {
@@ -94,23 +166,7 @@ const App: React.FC = () => {
     return () => clearTimeout(timer)
   }, [])
 
-  // Eagerly initialize compiler so it's ready when user starts editing
-  useEffect(() => {
-    CompilerService.initialize().catch(() => {
-      // Initialization errors will be handled when compile is called
-    })
-  }, [])
 
-  // Also update title when content changes (for auto-generated titles)
-  useEffect(() => {
-    if (currentDocument && latexCode !== currentDocument.content) {
-      // Title might have changed due to content update
-      const titlePrefix = currentDocument.title === `Untitled ${new Date().toLocaleDateString()}`
-        ? 'Untitled'
-        : currentDocument.title
-      document.title = `${titlePrefix} - Siglum`
-    }
-  }, [currentDocument, latexCode])
 
   // Save project files to localStorage when they change
   useEffect(() => {
@@ -170,15 +226,13 @@ const App: React.FC = () => {
         // Trigger immediate compile on document switch if auto-compile is enabled
         if (autoCompileRef.current) {
           // Clear any pending debounced compile
-          if (compileTimeoutRef.current) {
-            clearTimeout(compileTimeoutRef.current)
-          }
+          clearPendingAutoCompile()
           // Defer compile to allow state to update
           setTimeout(() => compileRef.current(), 0)
         }
       }
     }
-  }, [])
+  }, [clearPendingAutoCompile, autoCompileRef, compileRef])
 
   const handleLatexCodeChange = useCallback((newContent: string) => {
     setLatexCode(newContent)
@@ -191,113 +245,6 @@ const App: React.FC = () => {
     }
   }, [latexCode, selectedFilePath])
 
-  // Compile function
-  const compile = useCallback(async () => {
-    // Use CompilerService.getStatus() directly to avoid stale closure issues
-    const currentStatus = CompilerService.getStatus()
-    if (!latexCode || currentStatus === 'compiling' || currentStatus === 'initializing') {
-      return
-    }
-
-    try {
-      const result = await CompilerService.compile(latexCode, {
-        engine: compilerSettings.compiler,
-      })
-      if (result.success && result.pdf) {
-        // Copy the bytes explicitly to avoid "detached ArrayBuffer" issues from worker transfers
-        // Use Uint8Array (not ArrayBuffer) to avoid Safari detachment issues
-        const pdfCopy = new Uint8Array(result.pdf.length)
-        pdfCopy.set(result.pdf)
-        setPdfData(pdfCopy)
-        setCompileTimeMs(result.timeMs ?? null)
-
-        // Generate format (cache preamble) after successful compile if enabled
-        if (compilerSettings.cachePreamble) {
-          CompilerService.generateFormat(latexCode, {
-            engine: compilerSettings.compiler,
-          }).catch(() => {
-            // Format generation errors are logged but don't affect the user
-          })
-        }
-      }
-    } catch {
-      // Compilation errors are shown in the UI
-    }
-  }, [latexCode, compilerSettings.compiler, compilerSettings.cachePreamble])
-
-  // Wrapper for compiler settings that handles side effects
-  const handleCompilerSettingsChange = useCallback((newSettings: typeof compilerSettings) => {
-    // If cachePreamble was just turned off, clear the format cache
-    if (compilerSettings.cachePreamble && !newSettings.cachePreamble) {
-      CompilerService.clearCache()
-    }
-    // Update auto-unload setting
-    if (compilerSettings.autoUnload !== newSettings.autoUnload) {
-      CompilerService.setAutoUnload(newSettings.autoUnload)
-    }
-    setCompilerSettings(newSettings)
-  }, [compilerSettings.cachePreamble, compilerSettings.autoUnload])
-
-  // Keep refs to avoid stale closures in callbacks
-  const compileRef = useRef(compile)
-  const latexCodeRef = useRef(latexCode)
-  const autoCompileRef = useRef(compilerSettings.autoCompile)
-  useEffect(() => {
-    compileRef.current = compile
-  }, [compile])
-  useEffect(() => {
-    latexCodeRef.current = latexCode
-  }, [latexCode])
-  useEffect(() => {
-    autoCompileRef.current = compilerSettings.autoCompile
-  }, [compilerSettings.autoCompile])
-
-  // Subscribe to compiler status
-  const prevStatusRef = useRef<CompileStatus>('idle')
-  useEffect(() => {
-    return CompilerService.onStatus((status) => {
-      const prevStatus = prevStatusRef.current
-      prevStatusRef.current = status
-      setCompileStatus(status)
-
-      // Trigger compile when initialization completes and we have content
-      if (prevStatus === 'initializing' && status === 'idle' && latexCodeRef.current && autoCompileRef.current) {
-        // Defer to allow React state to update
-        setTimeout(() => compileRef.current(), 0)
-      }
-    })
-  }, [])
-
-  // Listen for triggerCompile event from editor (Cmd+S)
-  useEffect(() => {
-    const handleTriggerCompile = () => {
-      compile()
-    }
-    window.addEventListener('triggerCompile', handleTriggerCompile)
-    return () => window.removeEventListener('triggerCompile', handleTriggerCompile)
-  }, [compile])
-
-  // Auto-compile on content change (debounced)
-  useEffect(() => {
-    // Skip if auto-compile disabled, no content, or during initial load
-    if (!compilerSettings.autoCompile || !latexCode || !isLoaded) return
-
-    // Clear previous timeout
-    if (compileTimeoutRef.current) {
-      clearTimeout(compileTimeoutRef.current)
-    }
-
-    // Debounce compile by 1 second
-    compileTimeoutRef.current = window.setTimeout(() => {
-      compileRef.current()
-    }, 1000)
-
-    return () => {
-      if (compileTimeoutRef.current) {
-        clearTimeout(compileTimeoutRef.current)
-      }
-    }
-  }, [latexCode, isLoaded, compilerSettings.autoCompile])
 
   // Auto-save with debouncing
   const saveStatus = useAutoSave(latexCode, {
@@ -321,48 +268,22 @@ const App: React.FC = () => {
 
   // DocumentManager now handles search index updates automatically
 
-  // Listen for command palette event from Monaco Editor
-  React.useEffect(() => {
-    const handleToggleCommandPalette = () => {
-      setShowCommandPalette(prev => !prev)
+  // Type-safe event subscriptions via EventBus
+  useEventBus('toggleCommandPalette', () => {
+    if (showCommandPalette) {
+      closeCommandPalette()
+    } else {
+      openCommandPalette()
     }
+  }, [showCommandPalette, closeCommandPalette, openCommandPalette])
 
-    window.addEventListener('toggleCommandPalette', handleToggleCommandPalette)
-    return () => window.removeEventListener('toggleCommandPalette', handleToggleCommandPalette)
-  }, [showCommandPalette])
-
-  // Animated close handler for command palette
-  const handleCloseCommandPalette = useCallback(() => {
-    setIsClosingCommandPalette(true)
-    setTimeout(() => {
-      setIsClosingCommandPalette(false)
-      setShowCommandPalette(false)
-    }, 200) // Match animation duration
-  }, [])
-
-  // Animated close handler for documentation modal
-  const handleCloseDocumentation = useCallback(() => {
-    setIsClosingDocumentation(true)
-    setTimeout(() => {
-      setIsClosingDocumentation(false)
-      setShowDocumentation(false)
-      setDocumentationOpenedFromPalette(false)
-    }, 200) // Match animation duration
-  }, [])
-
-  // Listen for toggleHelp event from editor toolbar
-  useEffect(() => {
-    const handleToggleHelp = () => {
-      if (showDocumentation) {
-        handleCloseDocumentation()
-      } else {
-        setShowDocumentation(true)
-      }
+  useEventBus('toggleHelp', () => {
+    if (showDocumentation) {
+      closeDocumentation()
+    } else {
+      openDocumentation(false)
     }
-
-    window.addEventListener('toggleHelp', handleToggleHelp)
-    return () => window.removeEventListener('toggleHelp', handleToggleHelp)
-  }, [showDocumentation, handleCloseDocumentation])
+  }, [showDocumentation, closeDocumentation, openDocumentation])
 
   // Command palette handlers
   const handleSelectDocument = useCallback(async (documentId: string) => {
@@ -378,7 +299,7 @@ const App: React.FC = () => {
       if (lineNumber) {
         // Delay to let the editor update with new content
         setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('goToLine', { detail: { line: lineNumber } }))
+          EventBus.emit('goToLine', { line: lineNumber })
         }, 100)
       }
     }
@@ -388,169 +309,9 @@ const App: React.FC = () => {
     await createNewDocument()
   }, [createNewDocument])
 
-  const handleCloseCurrentDocument = useCallback(async () => {
-    const recentDocs = DocumentManager.getRecentDocuments()
-    if (recentDocs.length > 1) {
-      // Switch to the second most recent document (first is current)
-      await loadDocument(recentDocs[1].id)
-    } else {
-      // Create a new document if no other documents exist
-      await createNewDocument()
-    }
-  }, [loadDocument, createNewDocument])
-
-  // Keyboard shortcuts
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Command palette shortcuts (global)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
-        e.preventDefault()
-        e.stopPropagation()
-
-        if (showCommandPalette) {
-          handleCloseCommandPalette()
-        } else {
-          // Close any open modals when opening command palette
-          if (showDocumentation) {
-            handleCloseDocumentation()
-          } else {
-            setShowDocumentation(false)
-          }
-          setIsClosingCommandPalette(false)
-          setShowCommandPalette(true)
-        }
-        return
-      }
-
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'F') {
-        e.preventDefault()
-        if (showCommandPalette) {
-          // Close with animation
-          handleCloseCommandPalette()
-        } else {
-          // Close any open modals when opening command palette
-          if (showDocumentation) {
-            handleCloseDocumentation()
-          } else {
-            setShowDocumentation(false)
-          }
-          setIsClosingCommandPalette(false)
-          setShowCommandPalette(true)
-        }
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
-        e.preventDefault()
-        handleCreateNewDocument()
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
-        e.preventDefault()
-        // Close current document (go to most recent)
-        handleCloseCurrentDocument()
-        return
-      }
-      
-      // Undo/Redo shortcuts
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        // Perform undo
-        DocumentManager.undo().then(result => {
-          if (result) {
-            setLatexCode(result.content)
-            // TODO: Restore cursor position in editor
-          }
-        })
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && ((e.shiftKey && e.key === 'z') || e.key === 'y')) {
-        e.preventDefault()
-        // Perform redo
-        DocumentManager.redo().then(result => {
-          if (result) {
-            setLatexCode(result.content)
-            // TODO: Restore cursor position in editor
-          }
-        })
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
-        e.preventDefault()
-
-        if (showDocumentation) {
-          handleCloseDocumentation()
-        } else {
-          if (showCommandPalette) {
-            setDocumentationOpenedFromPalette(true)
-            handleCloseCommandPalette()
-          } else {
-            setDocumentationOpenedFromPalette(false)
-          }
-          setShowDocumentation(true)
-        }
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
-        e.preventDefault()
-        // Export current document
-        DocumentManager.exportDocument()
-        return
-      }
-      
-      // Cmd+. or Ctrl+. - toggle project sidebar
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
-        e.preventDefault()
-        setSidebarExpanded(prev => !prev)
-        return
-      }
-
-      // Cmd+1 or Ctrl+1 - show only editor
-      if ((e.metaKey || e.ctrlKey) && e.key === '1') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(false)
-        } else {
-          setShowPreview(false) // For mobile
-        }
-      }
-      // Cmd+2 or Ctrl+2 - show editor and preview
-      else if ((e.metaKey || e.ctrlKey) && e.key === '2') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(true)
-          setTimeout(() => {
-            editorPanelRef.current?.resize(50)
-            previewPanelRef.current?.resize(50)
-          }, 0)
-        } else {
-          setShowPreview(true) // For mobile
-        }
-      }
-      // Cmd+\ or Ctrl+\ - toggle/balance panels
-      else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(prev => !prev)
-          if (showDesktopPreview) {
-            setTimeout(() => {
-              editorPanelRef.current?.resize(50)
-              previewPanelRef.current?.resize(50)
-            }, 0)
-          }
-        } else {
-          setShowPreview(prev => !prev) // For mobile
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [showCommandPalette, showDesktopPreview, showDocumentation, handleCloseCommandPalette, handleCloseDocumentation, handleCreateNewDocument, handleCloseCurrentDocument, createNewDocument, loadDocument])
+  const handleSelectCitation = useCallback((citation: CitationItem) => {
+    EventBus.emit('insertText', { text: `\\cite{${citation.citeKey}}` })
+  }, [])
 
   // Mobile swipe gestures  
   const handleTouchStart = useCallback((e: React.TouchEvent) => {
@@ -580,24 +341,8 @@ const App: React.FC = () => {
 
   // Modal handlers for command palette integration
   const handleOpenHelp = useCallback(() => {
-    if (showCommandPalette) {
-      setDocumentationOpenedFromPalette(true)
-      handleCloseCommandPalette() // Close command palette with animation
-    } else {
-      setDocumentationOpenedFromPalette(false)
-    }
-    setShowDocumentation(true)
-  }, [showCommandPalette, handleCloseCommandPalette])
-
-  const handleBackFromDocumentation = useCallback(() => {
-    setIsClosingDocumentation(true)
-    setTimeout(() => {
-      setIsClosingDocumentation(false)
-      setShowDocumentation(false)
-      setDocumentationOpenedFromPalette(false)
-      setShowCommandPalette(true)
-    }, 200) // Match animation duration
-  }, [])
+    openDocumentation(showCommandPalette)
+  }, [openDocumentation, showCommandPalette])
 
   const handleCreateFromTemplate = useCallback(async (template: string) => {
     const DocumentManager = (await import('./services/DocumentManager')).default
@@ -694,22 +439,27 @@ const App: React.FC = () => {
           <CommandPalette
             isOpen={showCommandPalette}
             isClosing={isClosingCommandPalette}
-            onClose={() => setShowCommandPalette(false)}
+            onClose={handleCloseCommandPaletteModal}
             onSelectDocument={handleSelectDocument}
             onSelectFile={handleSelectFile}
+            onSelectCitation={handleSelectCitation}
             onCreateNew={handleCreateNewDocument}
             onOpenHelp={handleOpenHelp}
           />
           <EmptyState
-            onOpenCommandPalette={() => setShowCommandPalette(true)}
+            onOpenCommandPalette={handleOpenCommandPaletteModal}
           />
-          <DocumentationModal
-            isOpen={showDocumentation}
-            isClosing={isClosingDocumentation}
-            onClose={handleCloseDocumentation}
-            onBack={documentationOpenedFromPalette ? handleBackFromDocumentation : undefined}
-            onCreateFromTemplate={handleCreateFromTemplate}
-          />
+          {showDocumentation && (
+            <Suspense fallback={null}>
+              <DocumentationModal
+                isOpen={showDocumentation}
+                isClosing={isClosingDocumentation}
+                onClose={closeDocumentation}
+                onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
+                onCreateFromTemplate={handleCreateFromTemplate}
+              />
+            </Suspense>
+          )}
         </div>
       )
   }
@@ -723,9 +473,10 @@ const App: React.FC = () => {
       <CommandPalette
         isOpen={showCommandPalette}
         isClosing={isClosingCommandPalette}
-        onClose={() => setShowCommandPalette(false)}
+        onClose={handleCloseCommandPaletteModal}
         onSelectDocument={handleSelectDocument}
         onSelectFile={handleSelectFile}
+        onSelectCitation={handleSelectCitation}
         onCreateNew={handleCreateNewDocument}
         onOpenHelp={handleOpenHelp}
       />
@@ -735,22 +486,25 @@ const App: React.FC = () => {
           <PanelGroup direction="horizontal" autoSaveId="editor-preview-panels">
             <Panel ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
               <div className="editor-with-sidebar">
-                <ProjectSidebar
-                  isExpanded={sidebarExpanded}
-                  onToggle={() => setSidebarExpanded(prev => !prev)}
-                  files={projectFiles}
-                  onFilesChange={setProjectFiles}
-                  onFileSelect={handleFileSelect}
-                  selectedFileId={selectedFileId}
-                  triggerGitConnect={triggerGitConnect}
-                  onGitConnectTriggered={() => setTriggerGitConnect(false)}
-                />
+                <Suspense fallback={null}>
+                  <ProjectSidebar
+                    isExpanded={sidebarExpanded}
+                    onToggle={handleToggleSidebar}
+                    files={projectFiles}
+                    onFilesChange={setProjectFiles}
+                    onFileSelect={handleFileSelect}
+                    selectedFileId={selectedFileId}
+                    triggerGitConnect={triggerGitConnect}
+                    onGitConnectTriggered={handleGitConnectTriggered}
+                  />
+                </Suspense>
                 <LaTeXEditor
                   value={latexCode}
                   onChange={handleLatexCodeChange}
                   onSelectionChange={handleEditorSelection}
+                  documentId={currentDocument?.id}
                   compilerSettings={compilerSettings}
-                  onCompilerSettingsChange={handleCompilerSettingsChange}
+                  onCompilerSettingsChange={setCompilerSettings}
                   compileStatus={compileStatus}
                   compileTimeMs={compileTimeMs}
                   onCompile={compile}
@@ -776,20 +530,22 @@ const App: React.FC = () => {
 
         {/* Mobile: Single panel view */}
         <div className={`mobile-view ${isLoaded ? 'loaded' : ''}`}>
-          <ProjectSidebar
-            isExpanded={sidebarExpanded}
-            onToggle={() => setSidebarExpanded(prev => !prev)}
-            files={projectFiles}
-            onFilesChange={setProjectFiles}
-            onFileSelect={handleFileSelect}
-            selectedFileId={selectedFileId}
-            triggerGitConnect={triggerGitConnect}
-            onGitConnectTriggered={() => setTriggerGitConnect(false)}
-          />
+          <Suspense fallback={null}>
+            <ProjectSidebar
+              isExpanded={sidebarExpanded}
+              onToggle={handleToggleSidebar}
+              files={projectFiles}
+              onFilesChange={setProjectFiles}
+              onFileSelect={handleFileSelect}
+              selectedFileId={selectedFileId}
+              triggerGitConnect={triggerGitConnect}
+              onGitConnectTriggered={handleGitConnectTriggered}
+            />
+          </Suspense>
           {sidebarExpanded && (
             <div
               className="mobile-sidebar-overlay"
-              onClick={() => setSidebarExpanded(false)}
+              onClick={handleCollapseSidebar}
             />
           )}
           {!showPreview ? (
@@ -797,9 +553,10 @@ const App: React.FC = () => {
               value={latexCode}
               onChange={handleLatexCodeChange}
               onSelectionChange={handleEditorSelection}
-              onMenuClick={() => setSidebarExpanded(true)}
+              onMenuClick={handleExpandSidebar}
+              documentId={currentDocument?.id}
               compilerSettings={compilerSettings}
-              onCompilerSettingsChange={handleCompilerSettingsChange}
+              onCompilerSettingsChange={setCompilerSettings}
               compileStatus={compileStatus}
               compileTimeMs={compileTimeMs}
               onCompile={compile}
@@ -814,23 +571,26 @@ const App: React.FC = () => {
         </div>
       </div>
       
-      <DocumentationModal
-        isOpen={showDocumentation}
-        isClosing={isClosingDocumentation}
-        onClose={handleCloseDocumentation}
-        onBack={documentationOpenedFromPalette ? handleBackFromDocumentation : undefined}
-        onCreateFromTemplate={handleCreateFromTemplate}
-      />
+      {showDocumentation && (
+        <Suspense fallback={null}>
+          <DocumentationModal
+            isOpen={showDocumentation}
+            isClosing={isClosingDocumentation}
+            onClose={closeDocumentation}
+            onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
+            onCreateFromTemplate={handleCreateFromTemplate}
+          />
+        </Suspense>
+      )}
       {showOnboarding && (
-        <Onboarding
-          onComplete={() => setShowOnboarding(false)}
-          onExpandSidebar={() => setSidebarExpanded(true)}
-          onCollapseSidebar={() => setSidebarExpanded(false)}
-          onConnectGithub={() => {
-            setTriggerGitConnect(true)
-            setSidebarExpanded(true)
-          }}
-        />
+        <Suspense fallback={null}>
+          <Onboarding
+            onComplete={handleOnboardingComplete}
+            onExpandSidebar={handleExpandSidebar}
+            onCollapseSidebar={handleCollapseSidebar}
+            onConnectGithub={handleConnectGithub}
+          />
+        </Suspense>
       )}
 
       {showConflictModal && (

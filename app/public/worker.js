@@ -1295,6 +1295,13 @@ self.onmessage = async function(e) {
             // Queue compile operations to prevent concurrent execution
             operationQueue = operationQueue.then(() => handleCompile(msg)).catch(e => {
                 workerLog(`Compile queue error: ${e.message}`);
+                // IMPORTANT: Send error response so main thread doesn't hang
+                self.postMessage({
+                    type: 'compile-response',
+                    id: msg.id,
+                    success: false,
+                    error: e.message,
+                });
             });
             break;
 
@@ -1302,6 +1309,13 @@ self.onmessage = async function(e) {
             // Queue format operations to prevent concurrent execution
             operationQueue = operationQueue.then(() => handleFormatGenerate(msg)).catch(e => {
                 workerLog(`Format queue error: ${e.message}`);
+                // IMPORTANT: Send error response so main thread doesn't hang
+                self.postMessage({
+                    type: 'format-generate-response',
+                    id: msg.id,
+                    success: false,
+                    error: e.message,
+                });
             });
             break;
 

@@ -3,11 +3,13 @@
  *
  * Searches file names and content in the current project.
  * Uses ProjectStore for file tree and GitService for reading content.
+ * Content search is offloaded to a Web Worker to prevent UI blocking.
  */
 
 import ProjectStore from './ProjectStore'
 import type { FileItem } from './ProjectStore'
 import GitService from './GitService'
+import type { SearchMessage, SearchResultMessage, ContentSearchResult, FileData } from '../workers/search.worker'
 
 export interface FileSearchResult {
   file: FileItem
@@ -41,7 +43,89 @@ const TEXT_EXTENSIONS = new Set([
 class ProjectSearcher {
   private contentCache: Map<string, string> = new Map()
   private cacheTimestamp: number = 0
-  private readonly CACHE_TTL = 30000 // 30 seconds
+  private readonly CACHE_TTL = 300000 // 5 minutes (was 30s - too short for real usage)
+
+  // File list cache - avoid flattening tree on every search
+  private fileListCache: FileItem[] | null = null
+  private fileListTimestamp: number = 0
+
+  // Extension cache - avoid repeated string splitting
+  private extensionCache: Map<string, string> = new Map()
+
+  // Search worker for offloading content search from main thread
+  private searchWorker: Worker | null = null
+  private workerRequestId = 0
+  private pendingRequests: Map<number, {
+    resolve: (results: ContentSearchResult[]) => void
+    reject: (error: Error) => void
+  }> = new Map()
+
+  /**
+   * Get or create the search worker
+   */
+  private getWorker(): Worker {
+    if (!this.searchWorker) {
+      this.searchWorker = new Worker(
+        new URL('../workers/search.worker.ts', import.meta.url),
+        { type: 'module' }
+      )
+      this.searchWorker.onmessage = (event: MessageEvent<SearchResultMessage>) => {
+        const { id, results } = event.data
+        const pending = this.pendingRequests.get(id)
+        if (pending) {
+          this.pendingRequests.delete(id)
+          pending.resolve(results)
+        }
+      }
+      this.searchWorker.onerror = (error) => {
+        // Reject all pending requests on worker error
+        for (const [id, pending] of this.pendingRequests) {
+          pending.reject(new Error(`Worker error: ${error.message}`))
+          this.pendingRequests.delete(id)
+        }
+      }
+    }
+    return this.searchWorker
+  }
+
+  /**
+   * Search content using the worker (off main thread)
+   */
+  private searchContentInWorker(
+    query: string,
+    files: FileData[],
+    caseSensitive: boolean,
+    maxResults: number
+  ): Promise<ContentSearchResult[]> {
+    return new Promise((resolve, reject) => {
+      const id = ++this.workerRequestId
+      this.pendingRequests.set(id, { resolve, reject })
+
+      const message: SearchMessage = {
+        type: 'search',
+        id,
+        query,
+        files,
+        caseSensitive,
+        maxResults
+      }
+
+      this.getWorker().postMessage(message)
+    })
+  }
+
+  /**
+   * Get file extension with caching
+   */
+  private getExtension(path: string): string {
+    if (this.extensionCache.has(path)) {
+      return this.extensionCache.get(path)!
+    }
+    const lastDot = path.lastIndexOf('.')
+    const ext = lastDot > 0 ? path.slice(lastDot + 1).toLowerCase() : ''
+    this.extensionCache.set(path, ext)
+    return ext
+  }
 
   /**
    * Search project files by name and optionally content
@@ -58,15 +142,16 @@ class ProjectSearcher {
       return []
     }
 
-    const allFiles = ProjectStore.getAllFiles()
+    const allFiles = this.getCachedFileList()
     const results: FileSearchResult[] = []
     const searchQuery = caseSensitive ? query : query.toLowerCase()
 
-    // Filter files by extension if specified
-    const filesToSearch = extensions
+    // Filter files by extension if specified (use Set for O(1) lookup)
+    const extensionSet = extensions ? new Set(extensions) : null
+    const filesToSearch = extensionSet
       ? allFiles.filter(f => {
-          const ext = f.path.split('.').pop()?.toLowerCase()
-          return ext && extensions.includes(ext)
+          const ext = this.getExtension(f.path)
+          return ext && extensionSet.has(ext)
         })
       : allFiles
 
@@ -91,64 +176,88 @@ class ProjectSearcher {
       }
     }
 
-    // Search file contents if enabled
+    // Early exit if we have enough high-quality matches
+    const highScoreMatches = results.filter(r => r.score >= 50).length
+    if (highScoreMatches >= maxResults) {
+      return results
+        .sort((a, b) => b.score - a.score)
+        .slice(0, maxResults)
+    }
+
+    // Search file contents if enabled - offloaded to worker
     if (searchContent && GitService.getStatus().isConnected) {
       const textFiles = filesToSearch.filter(f => {
-        const ext = f.path.split('.').pop()?.toLowerCase()
+        const ext = this.getExtension(f.path)
         return ext && TEXT_EXTENSIONS.has(ext)
       })
 
-      for (const file of textFiles) {
-        // Skip if already matched by name with high score
-        const existingMatch = results.find(r => r.file.path === file.path)
-        if (existingMatch && existingMatch.score >= 50) continue
+      // Build set of already-matched high-score files for quick lookup
+      const highScorePaths = new Set(
+        results.filter(r => r.score >= 50).map(r => r.file.path)
+      )
 
+      // Filter to only files that need content search
+      const filesToSearchContent = textFiles.filter(f => !highScorePaths.has(f.path))
+
+      // Load file contents (main thread) then search in worker
+      const fileDataPromises = filesToSearchContent.map(async (file): Promise<FileData | null> => {
         try {
           const content = await this.getFileContent(file.path)
-          if (!content) continue
+          if (!content) return null
+          return {
+            path: file.path,
+            name: file.name,
+            id: file.id,
+            content
+          }
+        } catch {
+          return null
+        }
+      })
 
-          const searchableContent = caseSensitive ? content : content.toLowerCase()
-          const lines = content.split('\n')
+      const fileDataResults = await Promise.all(fileDataPromises)
+      const fileData = fileDataResults.filter((f): f is FileData => f !== null)
 
-          let lineIndex = 0
-          let charIndex = 0
+      // Offload the actual search to the worker (off main thread)
+      if (fileData.length > 0) {
+        try {
+          const workerResults = await this.searchContentInWorker(
+            query,
+            fileData,
+            caseSensitive,
+            maxResults * 2 - results.length
+          )
 
-          // Find first match in content
-          const matchIndex = searchableContent.indexOf(searchQuery)
-          if (matchIndex !== -1) {
-            // Find line number
-            for (let i = 0; i < lines.length; i++) {
-              if (charIndex + lines[i].length >= matchIndex) {
-                lineIndex = i
-                break
-              }
-              charIndex += lines[i].length + 1 // +1 for newline
-            }
+          // Create a map to look up files by path
+          const fileMap = new Map(filesToSearchContent.map(f => [f.path, f]))
+          const resultsByPath = new Map(results.map(r => [r.file.path, r]))
 
-            // Create snippet with context
-            const startLine = Math.max(0, lineIndex - 1)
-            const endLine = Math.min(lines.length - 1, lineIndex + 1)
-            const snippet = lines.slice(startLine, endLine + 1).join('\n')
+          // Merge worker results into main results
+          for (const workerResult of workerResults) {
+            const file = fileMap.get(workerResult.filePath)
+            if (!file) continue
 
-            // If already matched by name, update the match
-            if (existingMatch) {
-              existingMatch.matchType = 'content'
-              existingMatch.lineNumber = lineIndex + 1
-              existingMatch.snippet = this.truncateSnippet(snippet, searchQuery)
-              existingMatch.score += 5
+            const existing = resultsByPath.get(workerResult.filePath)
+            if (existing) {
+              existing.matchType = 'content'
+              existing.lineNumber = workerResult.lineNumber
+              existing.snippet = workerResult.snippet
+              existing.score += workerResult.score
             } else {
-              results.push({
+              const result: FileSearchResult = {
                 file,
                 matchType: 'content',
-                lineNumber: lineIndex + 1,
-                snippet: this.truncateSnippet(snippet, searchQuery),
-                score: 5
-              })
+                lineNumber: workerResult.lineNumber,
+                snippet: workerResult.snippet,
+                score: workerResult.score
+              }
+              results.push(result)
+              resultsByPath.set(workerResult.filePath, result)
             }
           }
-        } catch (err) {
-          // Skip files that can't be read
-          console.warn(`[ProjectSearcher] Could not read ${file.path}:`, err)
+        } catch (error) {
+          // Worker failed, fall through without content search results
+          console.warn('Search worker failed:', error)
         }
       }
     }
@@ -160,6 +269,19 @@ class ProjectSearcher {
   }
 
   /**
+   * Get file list with caching
+   */
+  private getCachedFileList(): FileItem[] {
+    const now = Date.now()
+    if (this.fileListCache && now - this.fileListTimestamp < this.CACHE_TTL) {
+      return this.fileListCache
+    }
+    this.fileListCache = ProjectStore.getAllFiles()
+    this.fileListTimestamp = now
+    return this.fileListCache
+  }
+
+  /**
    * Search only file names (fast, no content reading)
    */
   searchFileNames(query: string, maxResults = 20): FileSearchResult[] {
@@ -167,7 +289,7 @@ class ProjectSearcher {
       return []
     }
 
-    const allFiles = ProjectStore.getAllFiles()
+    const allFiles = this.getCachedFileList()
     const searchQuery = query.toLowerCase()
     const results: FileSearchResult[] = []
 
@@ -219,36 +341,14 @@ class ProjectSearcher {
   }
 
   /**
-   * Truncate snippet to reasonable length
-   */
-  private truncateSnippet(snippet: string, query: string): string {
-    const maxLength = 150
-    if (snippet.length <= maxLength) return snippet
-
-    // Try to center on the query
-    const lowerSnippet = snippet.toLowerCase()
-    const queryIndex = lowerSnippet.indexOf(query.toLowerCase())
-
-    if (queryIndex === -1) {
-      return snippet.substring(0, maxLength) + '...'
-    }
-
-    const start = Math.max(0, queryIndex - 40)
-    const end = Math.min(snippet.length, queryIndex + query.length + 60)
-
-    let result = snippet.substring(start, end)
-    if (start > 0) result = '...' + result
-    if (end < snippet.length) result = result + '...'
-
-    return result
-  }
-
-  /**
-   * Clear the content cache
+   * Clear all caches
    */
   clearCache(): void {
     this.contentCache.clear()
     this.cacheTimestamp = 0
+    this.fileListCache = null
+    this.fileListTimestamp = 0
+    this.extensionCache.clear()
   }
 }
 

@@ -191,15 +191,21 @@ class DocumentManager {
   // Cache Management
 
   private addToCache(id: string, state: DocumentState): void {
-    // Evict oldest if full
+    // Evict oldest if full - O(k) single pass instead of O(k log k) sort
     if (this.cache.size >= MAX_CACHE_SIZE) {
-      const entries = [...this.cache.entries()]
-        .filter(([key]) => key !== this.currentDocument?.id)
-        .sort((a, b) => a[1].lastAccessed.getTime() - b[1].lastAccessed.getTime())
+      let oldestKey: string | null = null
+      let oldestTime = Infinity
 
-      if (entries.length > 0) {
-        this.cache.delete(entries[0][0])
+      for (const [key, entry] of this.cache) {
+        if (key === this.currentDocument?.id) continue
+        const time = entry.lastAccessed.getTime()
+        if (time < oldestTime) {
+          oldestTime = time
+          oldestKey = key
+        }
       }
+
+      if (oldestKey) this.cache.delete(oldestKey)
     }
     this.cache.set(id, state)
   }

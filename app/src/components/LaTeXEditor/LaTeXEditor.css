@@ -2,7 +2,8 @@
   height: 100%;
   width: 100%;
   background: var(--color-base);
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  /* Only animate background - avoids GPU recalc on all properties */
+  transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   position: relative;
   overflow: hidden;
   padding: 0;
@@ -130,6 +131,12 @@
   border-radius: 4px;
   cursor: pointer;
   transition: background 0.15s ease;
+  touch-action: manipulation;
+}
+
+.toolbar-item:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .toolbar-item:hover {
@@ -185,7 +192,7 @@
   border: none;
   border-radius: 4px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .compile-status:hover {
@@ -238,7 +245,7 @@
   transform: translateY(-50%);
   height: 2px;
   background: transparent;
-  transition: all 0.2s ease;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
 }
 
 .console-resize-handle:hover::before {
@@ -285,7 +292,7 @@
   border-radius: 4px;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .console-action:hover {
@@ -299,6 +306,8 @@
   padding: 8px 0;
   font-family: 'SF Mono', Monaco, monospace;
   font-size: 11px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .console-logs::-webkit-scrollbar {
@@ -458,8 +467,8 @@
   left: 50%;
   transform: translateX(-50%);
   background: var(--color-base-lighter);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 6px;
@@ -487,7 +496,7 @@
   justify-content: space-between;
   padding: 8px 14px;
   border-radius: 6px;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease;
 }
 
 .compiler-setting-row:hover {
@@ -547,7 +556,7 @@
   color: var(--color-text-primary);
   cursor: pointer;
   outline: none;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
 .setting-select:hover {
@@ -574,11 +583,81 @@
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   color: var(--color-text-secondary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .setting-action-btn:hover {
   background: rgba(232, 227, 211, 0.1);
   border-color: rgba(232, 227, 211, 0.2);
   color: var(--color-text-primary);
+}
+
+/* Small clickable indicator after citations without bibliography */
+.cm-hint-indicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  color: var(--color-text-tertiary);
+  background: rgba(232, 227, 211, 0.08);
+  border-radius: 3px;
+  cursor: pointer;
+  vertical-align: middle;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+}
+
+.cm-hint-indicator:hover {
+  background: var(--color-accent);
+  color: var(--color-base);
+  transform: scale(1.1);
+}
+
+.cm-hint-indicator:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
+}
+
+/* Click-triggered popover for hint actions */
+.cm-hint-popover {
+  position: absolute;
+  background: var(--color-base-darker);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+  white-space: nowrap;
+  transition: background 0.15s ease, color 0.15s ease;
+  animation: hintPopoverIn 0.15s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes hintPopoverIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.cm-hint-popover:hover {
+  background: var(--color-accent);
+  color: var(--color-base);
+  border-color: var(--color-accent);
+}
+
+.cm-hint-popover:focus {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }

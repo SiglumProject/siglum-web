@@ -4,7 +4,7 @@
   background: var(--color-base);
   position: relative;
   overflow: hidden;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .pdf-document {
@@ -21,6 +21,8 @@
   z-index: 1;
   background: transparent;
   container-type: inline-size;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 @media (min-width: 1200px) {
@@ -144,7 +146,7 @@
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, transform 0.15s ease;
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
 }
 
@@ -189,7 +191,7 @@
   border-radius: 4px;
   background: transparent;
   border: none;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .zoom-level:hover {
@@ -204,8 +206,8 @@
   left: 50%;
   transform: translateX(-50%);
   background: var(--color-base-lighter);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 6px;
@@ -238,7 +240,7 @@
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   text-align: left;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .zoom-preset:hover {
@@ -318,8 +320,14 @@
   border-radius: 4px;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
   padding: 0;
+  touch-action: manipulation;
+}
+
+.control-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .control-button:hover:not(:disabled) {
@@ -351,14 +359,19 @@
   border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 4px 8px;
-  font-size: 11px;
+  font-size: 16px; /* Prevents iOS zoom on focus */
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   color: var(--color-text-primary);
   width: 160px;
   height: 24px;
   box-sizing: border-box;
   outline: none;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.search-input:focus-visible {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(181, 133, 106, 0.2);
 }
 
 .search-input:focus {
@@ -402,12 +415,14 @@
 .search-highlight {
   background: rgba(255, 200, 0, 0.35);
   border-radius: 2px;
-  transition: background 0.15s ease;
+  /* No transition on non-active highlights - saves CPU on 100+ elements */
 }
 
 .search-highlight.active {
   background: rgba(255, 140, 0, 0.6);
   box-shadow: 0 0 0 2px rgba(255, 140, 0, 0.4);
+  /* Only animate the active highlight */
+  transition: background 0.15s ease, box-shadow 0.15s ease;
 }
 
 /* Outline/TOC Panel */
@@ -469,7 +484,7 @@
   color: var(--color-text-tertiary);
   font-size: 16px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .pdf-outline-close:hover {
@@ -481,6 +496,8 @@
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .pdf-outline-content::-webkit-scrollbar {
@@ -510,7 +527,6 @@
   gap: 6px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background 0.15s ease;
   min-height: 32px;
 }
 
