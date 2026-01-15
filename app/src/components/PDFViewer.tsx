@@ -31,6 +31,7 @@ const PAGE_CACHE_SIZE = 3
 interface PDFViewerProps {
   pdfUrl?: string
   pdfData?: Uint8Array
+  pdfIsShared?: boolean // True if pdfData is backed by SharedArrayBuffer (zero-copy)
   onCompile?: () => void
   isCompiling?: boolean
 }
@@ -56,7 +57,7 @@ const ZOOM_PRESETS = [
   { label: '200%', value: 2.0 },
 ]
 
-const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCompile, isCompiling }) => {
+const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, pdfIsShared, onCompile, isCompiling }) => {
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageCount, setPageCount] = useState(0)
@@ -86,6 +87,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
   const pageCacheRef = useRef<Map<number, pdfjsLib.PDFPageProxy>>(new Map()) // LRU page cache
   const searchAbortRef = useRef<AbortController | null>(null) // For cancelling ongoing search
   const measureCanvasRef = useRef<HTMLCanvasElement | null>(null) // Reusable canvas for text measurement
+  const offscreenCanvasRef = useRef<HTMLCanvasElement | null>(null) // Reusable offscreen canvas for double-buffering
   const pixelRatioRef = useRef(window.devicePixelRatio || 1) // Cache pixel ratio (rarely changes)
   const resizeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null) // For debounced resize
 
@@ -135,12 +137,18 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
 
         if (pdfData) {
           // Keep the original pdfData reference for download
-          // (it comes from compilation and won't be modified)
           pdfDataCopyRef.current = pdfData
-          // Create a single copy for pdf.js since it may detach the ArrayBuffer
-          const pdfCopy = new Uint8Array(pdfData.length)
-          pdfCopy.set(pdfData)
-          loadingTask = pdfjsLib.getDocument({ data: pdfCopy })
+
+          // SharedArrayBuffer can't be detached, so pass directly to pdf.js (zero-copy)
+          // Regular ArrayBuffer may be detached by pdf.js, so copy first
+          let dataForPdfJs: Uint8Array
+          if (pdfIsShared) {
+            dataForPdfJs = pdfData
+          } else {
+            dataForPdfJs = new Uint8Array(pdfData.length)
+            dataForPdfJs.set(pdfData)
+          }
+          loadingTask = pdfjsLib.getDocument({ data: dataForPdfJs })
         } else if (pdfUrl) {
           loadingTask = pdfjsLib.getDocument(pdfUrl)
         } else {
@@ -177,7 +185,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         renderTaskRef.current.cancel()
       }
     }
-  }, [pdfUrl, pdfData])
+  }, [pdfUrl, pdfData, pdfIsShared])
 
   // Get page from cache or load and cache it
   const getPageCached = useCallback(async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): Promise<pdfjsLib.PDFPageProxy> => {
@@ -210,7 +218,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
     return page
   }, [])
 
-  // Render current page
+  // Render current page using double-buffering to prevent blink
   const renderPage = useCallback(async () => {
     if (!pdf || !canvasRef.current) return
 
@@ -228,28 +236,55 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
     try {
       const page = await getPageCached(pdf, currentPage)
       const viewport = page.getViewport({ scale })
-
-      const canvas = canvasRef.current
-      const context = canvas.getContext('2d')
-      if (!context) return
-
-      // Set canvas size (use cached pixel ratio - rarely changes)
       const pixelRatio = pixelRatioRef.current
-      canvas.width = viewport.width * pixelRatio
-      canvas.height = viewport.height * pixelRatio
-      canvas.style.width = `${viewport.width}px`
-      canvas.style.height = `${viewport.height}px`
+      const requiredWidth = Math.ceil(viewport.width * pixelRatio)
+      const requiredHeight = Math.ceil(viewport.height * pixelRatio)
 
-      // Clear canvas before rendering
-      context.clearRect(0, 0, canvas.width, canvas.height)
-      context.scale(pixelRatio, pixelRatio)
+      // Reuse offscreen canvas for double-buffering (avoids GC pressure)
+      if (!offscreenCanvasRef.current) {
+        offscreenCanvasRef.current = document.createElement('canvas')
+      }
+      const offscreen = offscreenCanvasRef.current
 
+      // Only resize if dimensions changed (resize clears the canvas and resets context)
+      if (offscreen.width !== requiredWidth || offscreen.height !== requiredHeight) {
+        offscreen.width = requiredWidth
+        offscreen.height = requiredHeight
+      }
+
+      const offscreenCtx = offscreen.getContext('2d')
+      if (!offscreenCtx) return
+
+      // Clear and set up transform (context state persists, so always reset)
+      offscreenCtx.setTransform(1, 0, 0, 1, 0, 0)  // Reset to identity for clearRect
+      offscreenCtx.clearRect(0, 0, requiredWidth, requiredHeight)  // Clear before reuse
+      offscreenCtx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0)  // Scale for rendering
+
+      // Render to offscreen canvas
       renderTaskRef.current = page.render({
-        canvasContext: context,
+        canvasContext: offscreenCtx,
         viewport: viewport,
-        canvas: canvas,
+        canvas: offscreen,
       })
       await renderTaskRef.current.promise
+
+      // Only update visible canvas after render completes (atomic swap)
+      const canvas = canvasRef.current
+      if (!canvas) return
+
+      // Only resize visible canvas if dimensions changed (resizing clears content)
+      if (canvas.width !== requiredWidth || canvas.height !== requiredHeight) {
+        canvas.width = requiredWidth
+        canvas.height = requiredHeight
+        canvas.style.width = `${viewport.width}px`
+        canvas.style.height = `${viewport.height}px`
+      }
+
+      const context = canvas.getContext('2d')
+      if (context) {
+        // Draw offscreen content to visible canvas (single blit, no clear needed)
+        context.drawImage(offscreen, 0, 0)
+      }
 
       // Fetch text content once and reuse for text layer and search highlights
       const textContent = await page.getTextContent()
