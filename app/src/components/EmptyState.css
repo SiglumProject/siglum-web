@@ -24,7 +24,7 @@
   height: 200%;
   background: radial-gradient(circle at 50% 50%, rgba(217, 119, 87, 0.12) 0%, rgba(217, 119, 87, 0.04) 30%, transparent 60%);
   pointer-events: none;
-  animation: glowPulse 8s ease-in-out infinite;
+  /* animation: glowPulse 8s ease-in-out infinite; */
 }
 
 /* Secondary ambient glows */
@@ -64,27 +64,17 @@
   z-index: 10;
   padding: 88px 68px;
   background: rgba(34, 31, 26, 0.7);
-  border: 1px solid rgba(232, 227, 211, 0.08);
+  border: 1px solid rgba(217, 119, 87, 0.12);
   border-radius: 28px;
   backdrop-filter: blur(20px) saturate(180%);
   -webkit-backdrop-filter: blur(20px) saturate(180%);
-  box-shadow:
-    var(--shadow-xl),
-    0 0 0 1px rgba(232, 227, 211, 0.06) inset,
-    0 0 0 1.5px rgba(217, 119, 87, 0.04) inset,
-    0 0 20px rgba(217, 119, 87, 0.15), 0 0 40px rgba(217, 119, 87, 0.08);
   transition: border-color 0.3s ease, box-shadow 0.3s ease, transform 0.3s ease;
-}
-
-.empty-state-content:hover {
-  border-color: rgba(217, 119, 87, 0.12);
   box-shadow:
     var(--shadow-xl),
     0 0 0 1px rgba(232, 227, 211, 0.08) inset,
     0 0 0 1.5px rgba(217, 119, 87, 0.08) inset,
     0 0 30px rgba(217, 119, 87, 0.2),
     0 0 60px rgba(217, 119, 87, 0.12);
-  transform: translateY(-2px);
 }
 
 /* Title */
@@ -123,7 +113,7 @@
 }
 
 .empty-state-description {
-  font-size: 15px;
+  font-size: 16px;
   color: var(--color-text-muted);
   line-height: 1.7;
   font-family: var(--font-body);
@@ -209,6 +199,11 @@
   color: var(--color-text-secondary);
   font-weight: 600;
   margin-left: 6px;
+}
+
+.link-button kbd span {
+ font-size: 13px;
+ margin-top: 2px;
 }
 
 .separator {

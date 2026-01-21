@@ -17,6 +17,8 @@
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
   border: 1px solid var(--color-border);
   max-height: calc(100vh - 16vh);
+  width: 680px;
+  max-width: 90vw;
 }
 
 .doc-modal-container {
@@ -644,6 +646,22 @@
   margin: 0;
 }
 
+.faq-item p + p {
+  margin-top: 8px;
+}
+
+/* Text links - inherit color with underline */
+.text-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--color-text-tertiary);
+  text-underline-offset: 2px;
+}
+
+.text-link:hover {
+  text-decoration-color: var(--color-text-secondary);
+}
+
 /* Help Section */
 .help-section {
   margin-bottom: 20px;
@@ -824,4 +842,441 @@
 
 .template-card .use-template-button:hover {
   opacity: 0.9;
+}
+
+/* ==========================================================================
+   INTEGRATIONS TAB - Split layout with secondary nav
+   ========================================================================== */
+
+.doc-content.integrations-split {
+  display: flex;
+  gap: 0;
+  padding: 0;
+  margin: -24px; /* Offset parent padding */
+  width: calc(100% + 48px);
+  height: calc(100% + 48px);
+}
+
+.integrations-nav {
+  width: 120px;
+  flex-shrink: 0;
+  padding: 16px 8px;
+  background: rgba(0, 0, 0, 0.15);
+  border-right: 1px solid var(--color-border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.integrations-nav-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.1s ease;
+}
+
+.integrations-nav-btn:hover {
+  background: rgba(232, 227, 211, 0.06);
+  color: var(--color-text-primary);
+}
+
+.integrations-nav-btn.active {
+  background: rgba(232, 227, 211, 0.1);
+  color: var(--color-text-primary);
+}
+
+.integrations-nav-btn svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.integrations-nav-btn.active svg {
+  opacity: 1;
+}
+
+.integrations-nav-btn span:first-of-type:not(.integrations-nav-dot) {
+  flex: 1;
+}
+
+.integrations-nav-dot {
+  width: 6px;
+  height: 6px;
+  background: #6b7a5e;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.integrations-content {
+  flex: 1;
+  padding: 24px;
+  overflow-y: auto;
+}
+
+.integration-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.integration-header svg {
+  color: var(--color-text-secondary);
+  flex-shrink: 0;
+}
+
+.integration-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--color-text-primary);
+}
+
+.integrations-content .doc-lead {
+  margin-bottom: 20px;
+}
+
+.integration-fields {
+  margin-bottom: 16px;
+}
+
+/* Status banner */
+.integration-status-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  margin-bottom: 20px;
+}
+
+.integration-status-banner.connected {
+  background: rgba(107, 122, 94, 0.15);
+  color: #8fa07e;
+}
+
+/* Form fields */
+.integration-page-content {
+  display: flex;
+  flex-direction: column;
+}
+
+.integration-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.integration-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.integration-field label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.01em;
+}
+
+.integration-field input {
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 14px;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.integration-field input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.integration-field input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(184, 149, 110, 0.15);
+}
+
+.integration-field-value {
+  font-size: 14px;
+  color: var(--color-text-primary);
+  font-family: 'SF Mono', Monaco, monospace;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.integration-field-value.editable {
+  padding: 6px 0;
+}
+
+.branch-input {
+  width: 100%;
+  padding: 4px 8px;
+  font-size: 14px;
+  font-family: 'SF Mono', Monaco, monospace;
+  color: var(--color-text-primary);
+  background: rgba(232, 227, 211, 0.06);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 4px;
+  outline: none;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.branch-input:hover {
+  background: rgba(232, 227, 211, 0.08);
+}
+
+.branch-input:focus {
+  border-color: var(--color-accent);
+  background: rgba(232, 227, 211, 0.1);
+}
+
+.integration-field-help {
+  font-size: 12px;
+  color: var(--color-accent);
+  text-decoration: none;
+  transition: opacity 0.15s ease;
+}
+
+.integration-field-help:hover {
+  opacity: 0.8;
+}
+
+.integration-field-hint {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.integration-form-error {
+  font-size: 13px;
+  color: #e07070;
+  margin: 0;
+  padding: 8px 12px;
+  background: rgba(224, 112, 112, 0.1);
+  border-radius: 6px;
+}
+
+/* Action buttons */
+.integration-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.integration-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  border: none;
+}
+
+.integration-action-btn.primary {
+  background: var(--color-accent);
+  color: var(--color-base);
+}
+
+.integration-action-btn.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.integration-action-btn.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.integration-action-btn.secondary {
+  background: transparent;
+  color: var(--color-text-tertiary);
+  padding: 10px 14px;
+}
+
+.integration-action-btn.secondary:hover {
+  color: var(--color-text-secondary);
+}
+
+/* Spinning animation */
+.integration-action-btn .spinning {
+  animation: doc-spin 1s linear infinite;
+}
+
+@keyframes doc-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Feature section within integration page */
+.integration-feature-section {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.integration-feature-section h4 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  margin: 0 0 8px 0;
+}
+
+.integration-feature-section p {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--color-text-tertiary);
+  margin: 0;
+}
+
+/* ==========================================================================
+   COLLABORATION TAB
+   ========================================================================== */
+
+.collab-section {
+  margin-bottom: 28px;
+}
+
+.collab-section:last-child {
+  margin-bottom: 0;
+}
+
+.collab-section h3 {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 10px 0;
+}
+
+.collab-section p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  margin: 0 0 12px 0;
+}
+
+.collab-steps {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.collab-steps li {
+  margin-bottom: 6px;
+}
+
+.collab-steps li:last-child {
+  margin-bottom: 0;
+}
+
+.collab-tips {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.collab-tips li {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+
+.collab-tips li:last-child {
+  margin-bottom: 0;
+}
+
+.collab-tips li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 4px;
+  height: 4px;
+  background: var(--color-accent);
+  border-radius: 50%;
+}
+
+.collab-tips code {
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 12px;
+  background: rgba(232, 227, 211, 0.08);
+  padding: 2px 5px;
+  border-radius: 3px;
+  color: var(--color-text-primary);
+}
+
+.collab-comparison {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.collab-column {
+  background: rgba(232, 227, 211, 0.04);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 8px;
+  padding: 14px;
+}
+
+.collab-column h4 {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 10px 0;
+}
+
+.collab-column ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.collab-column ul li {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+  padding-left: 14px;
+  position: relative;
+  margin-bottom: 4px;
+}
+
+.collab-column ul li:last-child {
+  margin-bottom: 0;
+}
+
+.collab-column ul li::before {
+  content: '•';
+  position: absolute;
+  left: 0;
+  color: var(--color-text-tertiary);
+}
+
+.collab-note {
+  font-size: 12px !important;
+  color: var(--color-text-tertiary) !important;
+  font-style: italic;
 }

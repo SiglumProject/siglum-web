@@ -10,7 +10,6 @@ interface EmptyStateProps {
 
 const EmptyState: React.FC<EmptyStateProps> = ({ onOpenCommandPalette }) => {
   const [showDocumentation, setShowDocumentation] = useState(false)
-  const [defaultTab, setDefaultTab] = useState<'guide' | 'templates'>('guide')
   const isMobile = useIsMobile()
 
   const handleCreateWithTemplate = async () => {
@@ -31,18 +30,7 @@ $E = mc^2$
     await DocumentManager.createNew(starterTemplate)
   }
 
-  const handleCreateFromTemplate = async (template: string) => {
-    const DocumentManager = (await import('../services/DocumentManager')).default
-    await DocumentManager.createNew(template)
-  }
-
-  const openTemplates = () => {
-    setDefaultTab('templates')
-    setShowDocumentation(true)
-  }
-
   const openHelp = () => {
-    setDefaultTab('guide')
     setShowDocumentation(true)
   }
 
@@ -54,7 +42,7 @@ $E = mc^2$
           Write like nobody's watching
         </p>
         <p className="empty-state-description">
-          A LaTeX editor for work that needs your full attention. Works offline. No accounts. No compilation queues. Everything runs in your browser.
+          A free, open‑source LaTeX editor that runs in your browser, compiles locally, works offline, and doesn’t require an account.
         </p>
 
         <div className="empty-state-actions">
@@ -69,13 +57,6 @@ $E = mc^2$
         <div className="empty-state-secondary">
           <button
             className="link-button"
-            onClick={openTemplates}
-          >
-            Templates
-          </button>
-          <span className="separator">·</span>
-          <button
-            className="link-button"
             onClick={openHelp}
           >
             {isMobile ? 'Help' : <>Help <kbd>⌘H</kbd></>}
@@ -85,7 +66,7 @@ $E = mc^2$
             className="link-button search-button"
             onClick={onOpenCommandPalette}
           >
-            {isMobile ? 'Search' : <>Search <kbd>⌘K</kbd></>}
+            {isMobile ? 'Search' : <>Commands <kbd><span>⌘</span>K</kbd></>}
           </button>
         </div>
 
@@ -109,8 +90,6 @@ $E = mc^2$
       <DocumentationModal
         isOpen={showDocumentation}
         onClose={() => setShowDocumentation(false)}
-        onCreateFromTemplate={handleCreateFromTemplate}
-        defaultTab={defaultTab}
       />
     </div>
   )
