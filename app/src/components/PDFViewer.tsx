@@ -127,6 +127,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, pdfIs
   const pixelRatioRef = useRef(window.devicePixelRatio || 1) // Cache pixel ratio (rarely changes)
   const stateRestoredRef = useRef(false) // Track if state has been restored for this document
   const saveStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce state saves
+  const documentIdRef = useRef(documentId) // Ref for stable callback
+  documentIdRef.current = documentId
 
   // Parse SyncTeX data when it changes
   const parsedSyncTex = useMemo(() => {
@@ -191,8 +193,10 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, pdfIs
   }, [])
 
   // Save PDF viewer state to StateStore (debounced)
+  // Uses refs to avoid recreating callback on every state change
   const saveViewerState = useCallback(() => {
-    if (!documentId) return
+    const docId = documentIdRef.current
+    if (!docId) return
 
     // Clear any pending save
     if (saveStateTimeoutRef.current) {
@@ -203,15 +207,15 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, pdfIs
     saveStateTimeoutRef.current = setTimeout(() => {
       const t = transformRef.current
       StateStore.setPdfViewerState(
-        documentId,
-        renderScale,
+        docId,
+        renderScaleRef.current,
         t.x,
         t.y,
         t.scale,
-        currentPage
+        currentPageRef.current
       )
     }, 300)
-  }, [documentId, renderScale, currentPage])
+  }, []) // Stable callback - uses refs for changing values
 
   // Restore PDF viewer state from StateStore when document changes
   useEffect(() => {

@@ -12,6 +12,8 @@ const PDFViewer = lazy(() => import('./components/PDFViewer'))
 const DocumentationModal = lazy(() => import('./components/DocumentationModal'))
 const ProjectSidebar = lazy(() => import('./components/ProjectSidebar'))
 const Onboarding = lazy(() => import('./components/Onboarding/Onboarding'))
+const ShareModal = lazy(() => import('./components/ShareModal'))
+const ShareViewer = lazy(() => import('./components/ShareViewer'))
 import { useDocument } from './hooks/useDocument'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useCompilation } from './hooks/useCompilation'
@@ -19,6 +21,7 @@ import { useModals } from './hooks/useModals'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import DocumentManager from './services/DocumentManager'
 import GitService from './services/GitService'
+import ShareService from './services/ShareService'
 import EventBus from './services/EventBus'
 import { useEventBus } from './hooks/useEventBus'
 import './App.css'
@@ -50,12 +53,20 @@ const App: React.FC = () => {
   })
   const [triggerGitConnect, setTriggerGitConnect] = useState(false)
   const [showConflictModal, setShowConflictModal] = useState(false)
+  const [showShareModal, setShowShareModal] = useState(false)
+  const [isClosingShareModal, setIsClosingShareModal] = useState(false)
+  const [viewingShareId, setViewingShareId] = useState<string | null>(() => {
+    // Check URL for share link on initial load
+    const match = window.location.pathname.match(/^\/share\/([a-z0-9]+)$/i)
+    return match ? match[1] : null
+  })
   const editorPanelRef = useRef<ImperativePanelHandle>(null)
   const previewPanelRef = useRef<ImperativePanelHandle>(null)
 
   // Compilation state from hook
   const {
     pdfData,
+    syncTexData,
     compileStatus,
     compileTimeMs,
     compilerSettings,
@@ -73,6 +84,7 @@ const App: React.FC = () => {
     showDocumentation,
     isClosingDocumentation,
     documentationOpenedFromPalette,
+    documentationDefaultTab,
     openCommandPalette,
     closeCommandPalette,
     openDocumentation,
@@ -178,22 +190,31 @@ const App: React.FC = () => {
     localStorage.setItem('siglum-sidebar-expanded', String(sidebarExpanded))
   }, [sidebarExpanded])
 
-  // Subscribe to git status for remote change detection
-  const hasShownRemoteModal = useRef(false)
+  // Subscribe to git status - only show conflict modal for actual conflicts
+  const lastSyncTimeRef = useRef<Date | null>(null)
   useEffect(() => {
-    const unsubscribe = GitService.subscribeStatus((status) => {
-      // Show modal when remote has changes and we haven't shown it yet this session
-      if (status.behind > 0 && !showConflictModal && !hasShownRemoteModal.current) {
-        hasShownRemoteModal.current = true
+    const unsubscribe = GitService.subscribeStatus(async (status) => {
+      // Only show modal for actual conflicts (same files edited locally and remotely)
+      if (status.hasConflict && status.conflictingFiles && status.conflictingFiles.length > 0) {
         setShowConflictModal(true)
       }
-      // Reset the flag when we're caught up
-      if (status.behind === 0) {
-        hasShownRemoteModal.current = false
+
+      // If sync happened and current file might have changed, reload it
+      if (status.lastSync && lastSyncTimeRef.current !== status.lastSync && selectedFilePath) {
+        lastSyncTimeRef.current = status.lastSync
+        // Reload the current file in case it was updated from remote
+        try {
+          const content = await GitService.readFile(selectedFilePath)
+          if (content !== null && content !== latexCode) {
+            setLatexCode(content)
+          }
+        } catch {
+          // File might not exist, ignore
+        }
       }
     })
     return unsubscribe
-  }, [showConflictModal])
+  }, [selectedFilePath, latexCode])
 
   const handleUseRemote = useCallback(async () => {
     await GitService.forcePull()
@@ -344,15 +365,51 @@ const App: React.FC = () => {
     openDocumentation(showCommandPalette)
   }, [openDocumentation, showCommandPalette])
 
-  const handleCreateFromTemplate = useCallback(async (template: string) => {
-    const DocumentManager = (await import('./services/DocumentManager')).default
-    await DocumentManager.createNew(template)
-    // Reload the current document to reflect the new creation
-    const currentDoc = DocumentManager.getCurrentDocument()
-    if (currentDoc) {
-      await loadDocument(currentDoc.id)
+  const handleOpenIntegrations = useCallback(() => {
+    openDocumentation(false, 'integrations')
+  }, [openDocumentation])
+
+  // Handle citation insertion - add bibtex entry to references.bib
+  const handleCitationInsert = useCallback(async (citeKey: string, bibtex: string) => {
+    const bibPath = '/references.bib'
+
+    // Read existing content or start fresh
+    let existingContent = ''
+    if (GitService.getStatus().isConnected) {
+      const content = await GitService.readFile(bibPath)
+      if (content) {
+        existingContent = content
+      }
     }
-  }, [loadDocument])
+
+    // Check if this citation already exists (by citeKey)
+    if (existingContent.includes(`@`) && existingContent.includes(`{${citeKey},`)) {
+      // Citation already exists, don't duplicate
+      return
+    }
+
+    // Append the new bibtex entry
+    const newContent = existingContent
+      ? `${existingContent.trimEnd()}\n\n${bibtex}`
+      : bibtex
+
+    // Write to GitService filesystem
+    if (GitService.getStatus().isConnected) {
+      await GitService.writeFile(bibPath, newContent)
+    }
+
+    // Also ensure references.bib is in the project file tree
+    const bibFileExists = projectFiles.some(f => f.name === 'references.bib' || f.path === bibPath)
+    if (!bibFileExists) {
+      const newBibFile: FileItem = {
+        id: `bib-${Date.now()}`,
+        name: 'references.bib',
+        type: 'file',
+        path: bibPath
+      }
+      setProjectFiles(prev => [...prev, newBibFile])
+    }
+  }, [projectFiles])
 
   // Loading state with improved design
   if (isLoading) {
@@ -456,7 +513,7 @@ const App: React.FC = () => {
                 isClosing={isClosingDocumentation}
                 onClose={closeDocumentation}
                 onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
-                onCreateFromTemplate={handleCreateFromTemplate}
+                defaultTab={documentationDefaultTab}
               />
             </Suspense>
           )}
@@ -496,6 +553,7 @@ const App: React.FC = () => {
                     selectedFileId={selectedFileId}
                     triggerGitConnect={triggerGitConnect}
                     onGitConnectTriggered={handleGitConnectTriggered}
+                    onOpenIntegrations={handleOpenIntegrations}
                   />
                 </Suspense>
                 <LaTeXEditor
@@ -508,6 +566,7 @@ const App: React.FC = () => {
                   compileStatus={compileStatus}
                   compileTimeMs={compileTimeMs}
                   onCompile={compile}
+                  onCitationInsert={handleCitationInsert}
                 />
               </div>
             </Panel>
@@ -519,7 +578,7 @@ const App: React.FC = () => {
                 <Panel ref={previewPanelRef} defaultSize={45} minSize={20}>
                   <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
                     <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                      <PDFViewer pdfData={pdfData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} />
+                      <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} onOpenShare={() => setShowShareModal(true)} documentId={currentDocument?.id} />
                     </Suspense>
                   </div>
                 </Panel>
@@ -540,6 +599,7 @@ const App: React.FC = () => {
               selectedFileId={selectedFileId}
               triggerGitConnect={triggerGitConnect}
               onGitConnectTriggered={handleGitConnectTriggered}
+              onOpenIntegrations={handleOpenIntegrations}
             />
           </Suspense>
           {sidebarExpanded && (
@@ -560,11 +620,12 @@ const App: React.FC = () => {
               compileStatus={compileStatus}
               compileTimeMs={compileTimeMs}
               onCompile={compile}
+              onCitationInsert={handleCitationInsert}
             />
           ) : (
             <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
               <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                <PDFViewer pdfData={pdfData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} />
+                <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} onOpenShare={() => setShowShareModal(true)} documentId={currentDocument?.id} />
               </Suspense>
             </div>
           )}
@@ -578,7 +639,7 @@ const App: React.FC = () => {
             isClosing={isClosingDocumentation}
             onClose={closeDocumentation}
             onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
-            onCreateFromTemplate={handleCreateFromTemplate}
+            defaultTab={documentationDefaultTab}
           />
         </Suspense>
       )}
@@ -593,34 +654,117 @@ const App: React.FC = () => {
         </Suspense>
       )}
 
-      {showConflictModal && (
-        <div className="conflict-modal-overlay">
-          <div className="conflict-modal">
-            <h3 className="conflict-modal-title">Remote Changes Detected</h3>
-            <a
-              href={`https://github.com/${GitService.getConfig()?.repoUrl}/commits`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="conflict-modal-repo"
-            >
-              {GitService.getConfig()?.repoUrl}
-            </a>
-            <p className="conflict-modal-description">
-              The remote repository has been updated since you started editing.
-              You can pull the remote changes (your local edits will be lost) or
-              continue editing (your changes will overwrite remote on next sync).
-            </p>
-            <div className="conflict-modal-actions">
-              <button className="conflict-modal-btn secondary" onClick={handleKeepLocal}>
-                Continue Editing
-              </button>
-              <button className="conflict-modal-btn primary" onClick={handleUseRemote}>
-                Use Remote Version
-              </button>
+      {showShareModal && (
+        <Suspense fallback={null}>
+          <ShareModal
+            isOpen={showShareModal}
+            isClosing={isClosingShareModal}
+            onClose={() => {
+              setIsClosingShareModal(true)
+              setTimeout(() => {
+                setIsClosingShareModal(false)
+                setShowShareModal(false)
+              }, 200)
+            }}
+            onCreateShare={() => {
+              if (!pdfData) {
+                console.warn('No PDF data to share')
+                return null
+              }
+              const name = currentDocument?.title || 'Untitled'
+              const share = ShareService.createShare(name, pdfData.buffer)
+              // Copy link to clipboard
+              const url = ShareService.getShareUrl(share.id)
+              navigator.clipboard.writeText(url)
+              return share.id
+            }}
+            onViewShare={(shareId) => {
+              // Mark as viewed and open viewer
+              ShareService.markAsViewed(shareId)
+              setShowShareModal(false)
+              setViewingShareId(shareId)
+            }}
+          />
+        </Suspense>
+      )}
+
+      {viewingShareId && (
+        <Suspense fallback={null}>
+          <ShareViewer
+            shareId={viewingShareId}
+            onClose={() => {
+              setViewingShareId(null)
+              // Clear the /share/... URL path
+              if (window.location.pathname.startsWith('/share/')) {
+                window.history.replaceState({}, '', '/')
+              }
+            }}
+          />
+        </Suspense>
+      )}
+
+      {showConflictModal && (() => {
+        const config = GitService.getConfig()
+        const status = GitService.getStatus()
+        const repoPath = config?.repoUrl?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+        const currentBranch = config?.branch
+        const isSameBranch = status.conflictSource === 'same-branch'
+        const otherBranch = !isSameBranch ? status.conflictSource : undefined
+        const canShowCompare = config?.provider === 'github' && repoPath && otherBranch && currentBranch
+
+        return (
+          <div className="conflict-modal-overlay">
+            <div className="conflict-modal">
+              <h3 className="conflict-modal-title">Conflicting Changes</h3>
+              {repoPath && (
+                <a
+                  href={`https://github.com/${repoPath}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="conflict-modal-repo"
+                >
+                  {repoPath}
+                </a>
+              )}
+              {status.conflictingFiles && (
+                <ul className="conflict-modal-files">
+                  {status.conflictingFiles.map(file => (
+                    <li key={file.path}>
+                      <span className="conflict-file-name">{file.path}</span>
+                      {file.linesChanged !== undefined && (
+                        <span className="conflict-file-lines">
+                          {file.linesChanged} {file.linesChanged === 1 ? 'line' : 'lines'} different
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="conflict-modal-description">
+                This version and the GitHub version are different.
+              </p>
+              {canShowCompare && (
+                <a
+                  href={`https://github.com/${repoPath}/compare/${otherBranch}...${currentBranch}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="conflict-modal-compare-link"
+                >
+                  Compare on GitHub →
+                </a>
+              )}
+              <div className="conflict-modal-actions">
+                <button className="conflict-modal-btn secondary" onClick={handleKeepLocal}>
+                  Keep This Version
+                </button>
+                <button className="conflict-modal-btn primary" onClick={handleUseRemote}>
+                  Use Latest from GitHub
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
     </div>
   )
 }

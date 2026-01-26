@@ -31,6 +31,8 @@ const APP_KEYS = {
   RECENT_DOCUMENT_IDS: 'recent_document_ids',
   PROJECT_FILES: 'project_files',
   COMPILER_SETTINGS: 'compiler_settings',
+  SHOW_WORD_COUNT: 'show_word_count',
+  SHOW_DEBUG_INFO: 'show_debug_info',
 } as const
 
 export interface DocumentState {
@@ -39,6 +41,12 @@ export interface DocumentState {
   cursorEnd: number
   scrollTop: number
   scrollLeft: number
+  // PDF viewer state
+  pdfRenderScale?: number
+  pdfTransformX?: number
+  pdfTransformY?: number
+  pdfTransformScale?: number
+  pdfCurrentPage?: number
   updatedAt: number
 }
 
@@ -258,6 +266,22 @@ class StateStore {
     this.queueWrite(APP_STORE, APP_KEYS.COMPILER_SETTINGS, settings)
   }
 
+  async getShowWordCount(): Promise<boolean> {
+    return (await this.getAppValue(APP_KEYS.SHOW_WORD_COUNT)) ?? false
+  }
+
+  setShowWordCount(show: boolean): void {
+    this.queueWrite(APP_STORE, APP_KEYS.SHOW_WORD_COUNT, show)
+  }
+
+  async getShowDebugInfo(): Promise<boolean> {
+    return (await this.getAppValue(APP_KEYS.SHOW_DEBUG_INFO)) ?? false
+  }
+
+  setShowDebugInfo(show: boolean): void {
+    this.queueWrite(APP_STORE, APP_KEYS.SHOW_DEBUG_INFO, show)
+  }
+
   private async getAppValue<T>(key: string): Promise<T | undefined> {
     const db = await this.dbPromise
 
@@ -308,6 +332,11 @@ class StateStore {
       cursorEnd: end,
       scrollTop: existing?.scrollTop ?? 0,
       scrollLeft: existing?.scrollLeft ?? 0,
+      pdfRenderScale: existing?.pdfRenderScale,
+      pdfTransformX: existing?.pdfTransformX,
+      pdfTransformY: existing?.pdfTransformY,
+      pdfTransformScale: existing?.pdfTransformScale,
+      pdfCurrentPage: existing?.pdfCurrentPage,
       updatedAt: Date.now()
     }
     // Update cache immediately with LRU eviction
@@ -324,6 +353,39 @@ class StateStore {
       cursorEnd: existing?.cursorEnd ?? 0,
       scrollTop,
       scrollLeft,
+      pdfRenderScale: existing?.pdfRenderScale,
+      pdfTransformX: existing?.pdfTransformX,
+      pdfTransformY: existing?.pdfTransformY,
+      pdfTransformScale: existing?.pdfTransformScale,
+      pdfCurrentPage: existing?.pdfCurrentPage,
+      updatedAt: Date.now()
+    }
+    // Update cache immediately with LRU eviction
+    this.touchDocCache(documentId, state)
+    this.queueWrite(DOC_STATE_STORE, documentId, state)
+  }
+
+  setPdfViewerState(
+    documentId: string,
+    renderScale: number,
+    transformX: number,
+    transformY: number,
+    transformScale: number,
+    currentPage: number
+  ): void {
+    // Use in-memory cache for synchronous access (critical for beforeunload)
+    const existing = this.docStateCache.get(documentId)
+    const state: DocumentState = {
+      documentId,
+      cursorStart: existing?.cursorStart ?? 0,
+      cursorEnd: existing?.cursorEnd ?? 0,
+      scrollTop: existing?.scrollTop ?? 0,
+      scrollLeft: existing?.scrollLeft ?? 0,
+      pdfRenderScale: renderScale,
+      pdfTransformX: transformX,
+      pdfTransformY: transformY,
+      pdfTransformScale: transformScale,
+      pdfCurrentPage: currentPage,
       updatedAt: Date.now()
     }
     // Update cache immediately with LRU eviction
