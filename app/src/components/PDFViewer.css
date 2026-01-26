@@ -5,24 +5,24 @@
   position: relative;
   overflow: hidden;
   transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
 }
 
 .pdf-document {
   width: 100%;
   height: calc(100% - 32px);
   margin-top: 32px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 24px;
-  overflow: auto;
+  /* Apple-style: no scroll, all positioning via transform */
+  overflow: hidden;
   box-sizing: border-box;
   position: relative;
   z-index: 1;
   background: transparent;
-  container-type: inline-size;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
+  /* Prevent all browser gestures - we handle everything */
+  touch-action: none;
+  /* Prevent text selection during gestures */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 @media (min-width: 1200px) {
@@ -32,16 +32,19 @@
 }
 
 .pdf-page-wrapper {
-  position: relative;
-  margin: 0 auto;
-  display: inline-block;
+  /* Apple-style: absolute positioning, all movement via transform */
+  position: absolute;
+  top: 0;
+  left: 0;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.4),
     0 6px 16px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
   line-height: 0;
   background: #2a2520;
-  max-width: 100%;
+  /* Transform origin at top-left for predictable math */
+  transform-origin: 0 0;
+  /* Enable GPU acceleration */
+  will-change: transform;
 }
 
 .pdf-viewer.pdf-dark-mode .pdf-page-wrapper {
@@ -412,17 +415,88 @@
   pointer-events: none;
 }
 
+/* Search match highlighting - other matches (subtle gold, matches editor) */
 .search-highlight {
-  background: rgba(255, 200, 0, 0.35);
+  background: rgba(212, 166, 86, 0.2);
   border-radius: 2px;
   /* No transition on non-active highlights - saves CPU on 100+ elements */
 }
 
+/* Current/active search match - bright orange background (matches editor) */
 .search-highlight.active {
-  background: rgba(255, 140, 0, 0.6);
-  box-shadow: 0 0 0 2px rgba(255, 140, 0, 0.4);
+  background: rgba(255, 120, 0, 0.7);
   /* Only animate the active highlight */
-  transition: background 0.15s ease, box-shadow 0.15s ease;
+  transition: background 0.15s ease;
+}
+
+/* Search Dropdown (matches editor pattern) */
+.pdf-search-dropdown {
+  position: absolute;
+  top: 32px;
+  right: 12px;
+  height: 32px;
+  background: var(--color-base-darker);
+  border: 1px solid var(--color-border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  z-index: 15;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.pdf-search-input {
+  width: 180px;
+  height: 24px;
+  background: var(--color-base);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--color-text);
+  outline: none;
+}
+
+.pdf-search-input:focus {
+  border-color: var(--color-accent);
+}
+
+.pdf-search-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.pdf-search-count {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: center;
+}
+
+.pdf-search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background 0.15s ease;
+}
+
+.pdf-search-btn:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text);
+}
+
+.pdf-search-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 /* Outline/TOC Panel */
@@ -602,5 +676,45 @@
   .pdf-outline-panel {
     width: calc(100% - 32px);
     max-height: 50%;
+  }
+}
+
+/* SyncTeX line indicator - points to the line in the PDF */
+.pdf-sync-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: orange;
+  pointer-events: none;
+  z-index: 1000;
+  box-shadow: 0 0 10px orange, 0 0 20px orange;
+}
+
+.pdf-sync-indicator::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 0;
+  height: 0;
+  border-top: 10px solid transparent;
+  border-bottom: 10px solid transparent;
+  border-left: 16px solid orange;
+}
+
+@keyframes syncHighlightPulse {
+  0% {
+    opacity: 1;
+    box-shadow: 0 0 16px var(--color-accent);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 8px var(--color-accent);
+  }
+  100% {
+    opacity: 0.5;
+    box-shadow: none;
   }
 }
