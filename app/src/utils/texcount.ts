@@ -74,11 +74,12 @@ const CHAR_SPACE = 32       // space
 const CHAR_TAB = 9          // \t
 const CHAR_STAR = 42        // *
 const CHAR_AT = 64          // @
-const CHAR_UNDERSCORE = 95  // _
-const CHAR_CARET = 94       // ^
-const CHAR_AMPERSAND = 38   // &
-const CHAR_HASH = 35        // #
-const CHAR_TILDE = 126      // ~
+// Reserved for future use:
+// const CHAR_UNDERSCORE = 95  // _
+// const CHAR_CARET = 94       // ^
+// const CHAR_AMPERSAND = 38   // &
+// const CHAR_HASH = 35        // #
+// const CHAR_TILDE = 126      // ~
 
 /** Check if char is a letter (a-z, A-Z) */
 function isLetter(c: number): boolean {
@@ -333,12 +334,6 @@ class TeXCounterOptimized {
       const c = this.src.charCodeAt(this.pos)
       this.pos++
       if (c === CHAR_NEWLINE || c === CHAR_CR) break
-    }
-  }
-
-  private skipWhitespace(): void {
-    while (this.pos < this.len && isWhitespace(this.src.charCodeAt(this.pos))) {
-      this.pos++
     }
   }
 

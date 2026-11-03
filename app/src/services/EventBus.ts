@@ -21,6 +21,7 @@ export interface EventMap {
   // Modal events
   toggleCommandPalette: void
   toggleHelp: void
+  openIntegrations: void
 
   // Editor events
   goToLine: { line: number }
@@ -30,10 +31,12 @@ export interface EventMap {
   // Document events
   documentChanged: { id: string; content: string }
   documentSwitched: { id: string }
+  openDocument: { path: string; line?: number }
 
   // Project events
   fileSelected: { path: string; lineNumber?: number }
   filesChanged: void
+  filesystemChanged: { tree: import('./FileSystemWatcher').FileNode | null }
 
   // Git events
   gitStatusChanged: { behind: number; ahead: number }
@@ -42,6 +45,20 @@ export interface EventMap {
 
   // UI events
   sidebarToggled: { expanded: boolean }
+
+  // PDF/Editor sync events
+  syncModeChanged: { enabled: boolean }
+  forwardSync: { line: number; lineText: string }
+  inverseSync: { context: string; word: string; page: number; yFraction: number }
+
+  // Editor value override — resets echo-suppression flag so the next value prop is applied
+  forceEditorSync: void
+
+  // Scroll sync events (text-matching between editor viewport and PDF pages)
+  scrollSync: { text: string; source: 'editor' | 'pdf' }
+
+  // Toast notifications
+  showToast: { message: string; type?: 'success' | 'error' | 'info' | 'loading'; duration?: number; key?: string; className?: string }
 }
 
 type EventCallback<T> = T extends void ? () => void : (payload: T) => void

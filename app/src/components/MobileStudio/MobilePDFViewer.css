@@ -1,0 +1,17 @@
+.mobile-pdf-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #211e1a; }
+.mobile-pdf-toolbar { display: flex; align-items: center; flex-shrink: 0; height: 44px; padding: 0 8px; gap: 2px; border-bottom: 1px solid #484039; color: #eee8df; }
+.mobile-pdf-toolbar button { display: flex; align-items: center; justify-content: center; gap: 4px; min-width: 44px; height: 44px; padding: 0 8px; background: none; color: inherit; border: 0; font-size: 12px; }
+.mobile-pdf-count { flex: 1; font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mobile-pdf-fit { font-variant-numeric: tabular-nums; }
+.mobile-pdf-fit small { color: #bcb2a6; font-size: 10px; }
+.mobile-pdf-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; touch-action: pan-x pan-y; -webkit-overflow-scrolling: touch; overflow-anchor: none; }
+.mobile-pdf-pages { box-sizing: content-box; width: var(--pdf-page-width, calc(100% - 16px)); margin: 0 auto; padding: 8px; display: flex; flex-direction: column; gap: 12px; }
+.mobile-pdf-page { flex: none; position: relative; width: 100%; background: #34312c; box-shadow: 0 2px 12px #0004; container-type: inline-size; }
+.mobile-pdf-artwork { position: absolute; inset: 0; }
+.mobile-pdf-artwork canvas { display: block; width: 100%; height: 100%; filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg); }
+.mobile-pdf-artwork .pdf-text-layer { position: absolute; inset: 0; overflow: hidden; color: transparent; line-height: 1; }
+.mobile-pdf-artwork .pdf-text-layer span { position: absolute; white-space: pre; transform-origin: 0 0; cursor: text; line-height: 1; }
+.mobile-pdf-artwork .pdf-text-layer span::selection { background: #bba07a70; color: transparent; }
+.mobile-pdf-page-error, .mobile-pdf-message { padding: 20px; color: #eee8df; font-size: 13px; line-height: 1.5; }
+.mobile-pdf-page-error { position: absolute; inset: 0; }
+.mobile-pdf-page-error button, .mobile-pdf-message button { display: block; min-height: 44px; border: 1px solid #706457; border-radius: 6px; background: #34312c; color: #eee8df; padding: 0 12px; }

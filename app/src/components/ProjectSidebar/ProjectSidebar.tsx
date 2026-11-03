@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react'
-import { ChevronRight, File, FolderClosed, FolderOpen, Plus, FolderPlus, FilePlus, Trash2, X, Github, Check, RefreshCw, AlertCircle, Info } from 'lucide-react'
+import { ChevronRight, File, FolderClosed, FolderOpen, Plus, FolderPlus, FilePlus, Image, Trash2, RefreshCw, Plug } from 'lucide-react'
 import type { FileItem } from '../../services/ProjectStore'
-import ProjectStore from '../../services/ProjectStore'
-import GitService, { type GitStatus, type GitConfig } from '../../services/GitService'
+import { fileManager } from '../../services/FileManager'
+import { fileSystem } from '@siglum/filesystem'
+import { fileSystemWatcher } from '../../services/FileSystemWatcher'
+import GitService, { type GitStatus } from '../../services/GitService'
 import CitationService, { type ZoteroStatus } from '../../services/CitationService'
-import ZoteroIcon from '../icons/ZoteroIcon'
+import EventBus from '../../services/EventBus'
 import './ProjectSidebar.css'
 
 // ========================================
@@ -13,35 +15,6 @@ import './ProjectSidebar.css'
 // ========================================
 
 type IndexPath = number[]
-
-// Optimized: Uses mutable path array, only creates final array on success
-const findIndexPath = (items: FileItem[], id: string): IndexPath | null => {
-  const path: number[] = []
-  const search = (nodes: FileItem[]): boolean => {
-    for (let i = 0; i < nodes.length; i++) {
-      if (nodes[i].id === id) {
-        path.push(i)
-        return true
-      }
-      if (nodes[i].children) {
-        path.push(i)
-        if (search(nodes[i].children!)) return true
-        path.pop()
-      }
-    }
-    return false
-  }
-  return search(items) ? path : null
-}
-
-const getAtPath = (items: FileItem[], path: IndexPath): FileItem | null => {
-  if (path.length === 0) return null
-  let current: FileItem | undefined = items[path[0]]
-  for (let i = 1; i < path.length && current; i++) {
-    current = current.children?.[path[i]]
-  }
-  return current ?? null
-}
 
 const updateAtPath = (
   items: FileItem[],
@@ -98,64 +71,54 @@ const insertAtPath = (
   return newItems
 }
 
-const computeParentPath = (items: FileItem[], idxPath: IndexPath): string => {
-  let parentPath = ''
-  let current = items
-  for (let i = 0; i < idxPath.length - 1; i++) {
-    const name = current[idxPath[i]].name
-    parentPath = parentPath ? `${parentPath}/${name}` : `/${name}`
-    current = current[idxPath[i]].children || []
-  }
-  return parentPath
-}
-
 interface ProjectSidebarProps {
   isExpanded: boolean
   onToggle: () => void
   files: FileItem[]
-  onFilesChange: (files: FileItem[]) => void
   onFileSelect?: (file: FileItem) => void
   selectedFileId?: string
   triggerGitConnect?: boolean
   onGitConnectTriggered?: () => void
+  onOpenIntegrations?: () => void
 }
 
 interface FileTreeItemProps {
   item: FileItem
   depth: number
-  onDelete: (id: string) => void
   onRename: (id: string, newName: string) => void
   onAddChild: (parentId: string, type: 'file' | 'folder') => void
   onSelect: (item: FileItem) => void
   onMoveItem: (itemId: string, targetFolderId: string | null) => void
+  onContextMenu: (itemId: string, e: React.MouseEvent) => void
   selectedId?: string
   draggedId: string | null
   onDragStart: (id: string) => void
   onDragEnd: () => void
   editingNewId?: string | null
   onEditingComplete?: () => void
+  newFileIds?: Set<string>
 }
 
 const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   item,
   depth,
-  onDelete,
   onRename,
   onAddChild,
   onSelect,
   onMoveItem,
+  onContextMenu,
   selectedId,
   draggedId,
   onDragStart,
   onDragEnd,
   editingNewId,
-  onEditingComplete
+  onEditingComplete,
+  newFileIds
 }) => {
   const [isOpen, setIsOpen] = useState(false)
   const [isEditing, setIsEditing] = useState(editingNewId === item.id)
   const [editValue, setEditValue] = useState(item.name)
   const [isDragOver, setIsDragOver] = useState(false)
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
   // Start editing when this item is the newly created one
@@ -173,7 +136,12 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus()
-      inputRef.current.select()
+      const dot = editValue.lastIndexOf('.')
+      if (dot > 0) {
+        inputRef.current.setSelectionRange(0, dot)
+      } else {
+        inputRef.current.select()
+      }
     }
   }, [isEditing])
 
@@ -213,12 +181,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault()
     e.stopPropagation()
-    setShowDeleteConfirm(true)
-  }
-
-  const handleConfirmDelete = () => {
-    onDelete(item.id)
-    setShowDeleteConfirm(false)
+    onContextMenu(item.id, e)
   }
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -261,7 +224,7 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   return (
     <div className="file-tree-item">
       <div
-        className={`file-tree-row ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''} ${showDeleteConfirm ? 'delete-pending' : ''}`}
+        className={`file-tree-row ${isSelected ? 'selected' : ''} ${isDragging ? 'dragging' : ''} ${isDragOver ? 'drag-over' : ''}${newFileIds?.has(item.id) ? ' file-tree-row-enter' : ''}`}
         style={{ paddingLeft: `${8 + depth * 12}px` }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
@@ -300,20 +263,6 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
         )}
       </div>
 
-      {showDeleteConfirm && (
-        <div className="delete-confirm" style={{ paddingLeft: `${8 + depth * 12}px` }}>
-          <span>Delete?</span>
-          <div className="delete-confirm-actions">
-            <button className="delete-confirm-cancel" onClick={() => setShowDeleteConfirm(false)}>
-              <X size={12} />
-            </button>
-            <button className="delete-confirm-delete" onClick={handleConfirmDelete}>
-              <Trash2 size={12} />
-            </button>
-          </div>
-        </div>
-      )}
-
       {isFolder && isOpen && item.children && (
         <div className="file-tree-children">
           {item.children.map(child => (
@@ -321,17 +270,18 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
               key={child.id}
               item={child}
               depth={depth + 1}
-              onDelete={onDelete}
               onRename={onRename}
               onAddChild={onAddChild}
               onSelect={onSelect}
               onMoveItem={onMoveItem}
+              onContextMenu={onContextMenu}
               selectedId={selectedId}
               draggedId={draggedId}
               onDragStart={onDragStart}
               onDragEnd={onDragEnd}
               editingNewId={editingNewId}
               onEditingComplete={onEditingComplete}
+              newFileIds={newFileIds}
             />
           ))}
         </div>
@@ -345,7 +295,8 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
     prevProps.depth === nextProps.depth &&
     prevProps.selectedId === nextProps.selectedId &&
     prevProps.draggedId === nextProps.draggedId &&
-    prevProps.editingNewId === nextProps.editingNewId
+    prevProps.editingNewId === nextProps.editingNewId &&
+    prevProps.newFileIds === nextProps.newFileIds
   )
 })
 
@@ -353,13 +304,16 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
   isExpanded,
   onToggle,
   files,
-  onFilesChange,
   onFileSelect,
   selectedFileId,
   triggerGitConnect,
-  onGitConnectTriggered
+  onGitConnectTriggered,
+  onOpenIntegrations
 }) => {
   const [showAddMenu, setShowAddMenu] = useState(false)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number; y: number; itemId?: string
+  } | null>(null)
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = sessionStorage.getItem('sidebarWidth')
     return saved ? parseInt(saved, 10) : 240
@@ -368,38 +322,11 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [isExternalDragOver, setIsExternalDragOver] = useState(false)
   const [editingNewId, setEditingNewId] = useState<string | null>(null)
-  const [showGitSetup, setShowGitSetup] = useState(false)
+  const [newFileIds, setNewFileIds] = useState<Set<string>>(new Set())
+  const prevFileIdsRef = useRef<Set<string> | null>(null)
   const [gitStatus, setGitStatus] = useState<GitStatus>(GitService.getStatus())
-  // Zotero state
-  const [showZoteroSetup, setShowZoteroSetup] = useState(false)
   const [zoteroStatus, setZoteroStatus] = useState<ZoteroStatus>(CitationService.getZoteroStatus())
-  const [zoteroUserId, setZoteroUserId] = useState('')
-  const [zoteroApiKey, setZoteroApiKey] = useState('')
-  const [isZoteroConnecting, setIsZoteroConnecting] = useState(false)
-  const [zoteroSetupStep, setZoteroSetupStep] = useState<'connect' | 'done'>('connect')
-  const zoteroUserIdInputRef = useRef<HTMLInputElement>(null)
-  const [gitConfig, setGitConfig] = useState<Partial<GitConfig>>(() => {
-    const saved = GitService.getConfig()
-    return saved || {
-      provider: 'github',
-      repoUrl: '',
-      branch: 'main',
-      token: '',
-      username: '',
-      syncInterval: 'manual',
-      conflictResolution: 'newest',
-      autoSync: true
-    }
-  })
-  const [setupStep, setSetupStep] = useState<'connect' | 'create-repo' | 'done'>('connect')
-  const [isConnecting, setIsConnecting] = useState(false)
-  const [pendingRepoName, setPendingRepoName] = useState<string>('')
-  const [branchInput, setBranchInput] = useState('')
-  const [isSwitchingBranch, setIsSwitchingBranch] = useState(false)
-  const [showAutoPushInfo, setShowAutoPushInfo] = useState(false)
   const addMenuRef = useRef<HTMLDivElement>(null)
-  const gitSetupRef = useRef<HTMLDivElement>(null)
-  const repoInputRef = useRef<HTMLInputElement>(null)
 
   // Subscribe to git status updates
   useEffect(() => {
@@ -415,43 +342,40 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
     return unsubscribe
   }, [])
 
-  // Handle trigger from onboarding
+  // Handle trigger to open integrations modal
   useEffect(() => {
     if (triggerGitConnect && !gitStatus.isConnected) {
-      setShowGitSetup(true)
+      onOpenIntegrations?.()
       onGitConnectTriggered?.()
     }
-  }, [triggerGitConnect, gitStatus.isConnected, onGitConnectTriggered])
+  }, [triggerGitConnect, gitStatus.isConnected, onGitConnectTriggered, onOpenIntegrations])
 
-  // Focus input when git setup opens
+  // Detect newly added files for enter animation
   useEffect(() => {
-    if (showGitSetup && !gitStatus.isConnected && setupStep === 'connect') {
-      setTimeout(() => repoInputRef.current?.focus(), 50)
-    }
-  }, [showGitSetup, gitStatus.isConnected, setupStep])
-
-  // Track last files received from store to avoid redundant updates
-  const lastStoreFilesRef = useRef<FileItem[] | null>(null)
-
-  // Subscribe to ProjectStore changes (from Git sync)
-  useEffect(() => {
-    const unsubscribe = ProjectStore.subscribe((newFiles) => {
-      // Skip if same reference as last time (common case: our own setFiles call)
-      if (newFiles === lastStoreFilesRef.current) return
-      lastStoreFilesRef.current = newFiles
-
-      // Only update if store has different reference than current props
-      if (newFiles !== files) {
-        onFilesChange(newFiles)
+    const collectIds = (items: FileItem[]): Set<string> => {
+      const ids = new Set<string>()
+      for (const item of items) {
+        ids.add(item.id)
+        if (item.children) for (const id of collectIds(item.children)) ids.add(id)
       }
-    })
-    return unsubscribe
-  }, [files, onFilesChange])
-
-  // Sync files to ProjectStore whenever they change locally
-  useEffect(() => {
-    ProjectStore.setFiles(files)
+      return ids
+    }
+    const currentIds = collectIds(files)
+    if (prevFileIdsRef.current) {
+      const added = new Set<string>()
+      for (const id of currentIds) {
+        if (!prevFileIdsRef.current.has(id)) added.add(id)
+      }
+      if (added.size > 0) {
+        setNewFileIds(added)
+        setTimeout(() => setNewFileIds(new Set()), 300)
+      }
+    }
+    prevFileIdsRef.current = currentIds
   }, [files])
+
+  // Files now come from FileSystemWatcher via App.tsx
+  // No need for ProjectStore subscriptions
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -465,92 +389,35 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
     }
   }, [showAddMenu])
 
-  const handleGitConnect = async () => {
-    if (!gitConfig.repoUrl?.trim() || !gitConfig.token?.trim()) return
-
-    setIsConnecting(true)
-    try {
-      await GitService.connect(gitConfig as GitConfig)
-      setSetupStep('done')
-      setTimeout(() => {
-        setShowGitSetup(false)
-        setSetupStep('connect')
-      }, 1200)
-    } catch (error) {
-      if (error instanceof Error && error.message === 'REPO_NOT_FOUND') {
-        // Extract repo name from URL (e.g., "username/repo-name" -> "repo-name")
-        const repoPath = gitConfig.repoUrl?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '') || ''
-        const repoName = repoPath.split('/').pop() || repoPath
-        setPendingRepoName(repoName)
-        setSetupStep('create-repo')
-      } else {
-        console.error('Git connect failed:', error)
-      }
-    } finally {
-      setIsConnecting(false)
-    }
-  }
-
-  const handleCreateRepo = async () => {
-    if (!pendingRepoName) return
-
-    setIsConnecting(true)
-    try {
-      await GitService.createRepo(pendingRepoName, true)
-      setSetupStep('done')
-      setTimeout(() => {
-        setShowGitSetup(false)
-        setSetupStep('connect')
-        setPendingRepoName('')
-      }, 1200)
-    } catch (error) {
-      console.error('Failed to create repo:', error)
-    } finally {
-      setIsConnecting(false)
-    }
-  }
-
-  const handleGitDisconnect = async () => {
-    await GitService.disconnect()
-    setGitConfig({
-      provider: 'github',
-      repoUrl: '',
-      branch: 'main',
-      token: '',
-      username: '',
-      syncInterval: 'manual'
+  // Dismiss context menu on click-away or scroll
+  // Defer listener registration so the opening event finishes propagating first
+  useEffect(() => {
+    if (!contextMenu) return
+    const dismiss = () => setContextMenu(null)
+    const raf = requestAnimationFrame(() => {
+      document.addEventListener('mousedown', dismiss)
+      document.addEventListener('contextmenu', dismiss)
+      document.addEventListener('scroll', dismiss, true)
     })
-    setSetupStep('connect')
-  }
-
-  // Zotero handlers
-  const handleZoteroConnect = async () => {
-    if (!zoteroUserId.trim() || !zoteroApiKey.trim()) return
-
-    setIsZoteroConnecting(true)
-    try {
-      await CitationService.connectZotero(zoteroUserId.trim(), zoteroApiKey.trim())
-      setZoteroSetupStep('done')
-      setTimeout(() => {
-        setShowZoteroSetup(false)
-        setZoteroSetupStep('connect')
-        setZoteroUserId('')
-        setZoteroApiKey('')
-      }, 1200)
-    } catch (error) {
-      console.error('Zotero connect failed:', error)
-    } finally {
-      setIsZoteroConnecting(false)
+    return () => {
+      cancelAnimationFrame(raf)
+      document.removeEventListener('mousedown', dismiss)
+      document.removeEventListener('contextmenu', dismiss)
+      document.removeEventListener('scroll', dismiss, true)
     }
+  }, [contextMenu])
+
+  const handleFilesContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setContextMenu({ x: e.clientX, y: e.clientY })
   }
 
-  const handleZoteroDisconnect = async () => {
-    await CitationService.disconnectZotero()
-    setZoteroSetupStep('connect')
-    setZoteroUserId('')
-    setZoteroApiKey('')
+  const handleItemContextMenu = (itemId: string, e: React.MouseEvent) => {
+    setContextMenu({ x: e.clientX, y: e.clientY, itemId })
   }
 
+  // Quick sync handlers
   const handleZoteroSync = async () => {
     try {
       await CitationService.syncZotero()
@@ -560,107 +427,150 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
   }
 
   const handleSyncNow = async () => {
-    await GitService.sync()
-  }
-
-  const handleBranchSwitch = async () => {
-    const currentBranch = GitService.getConfig()?.branch || 'main'
-    const newBranch = branchInput.trim()
-
-    if (!newBranch || newBranch === currentBranch) {
-      setBranchInput('')
-      return
-    }
-
-    setIsSwitchingBranch(true)
     try {
-      await GitService.switchBranch(newBranch)
-      setBranchInput('')
-    } catch (error) {
-      console.error('Branch switch failed:', error)
-    } finally {
-      setIsSwitchingBranch(false)
+      await GitService.sync()
+      EventBus.emit('showToast', { message: 'Synced with GitHub', type: 'success' })
+    } catch {
+      EventBus.emit('showToast', { message: 'Sync failed', type: 'error' })
     }
   }
 
-  const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-
-  const addItem = (type: 'file' | 'folder') => {
-    const newId = generateId()
+  const addItem = async (type: 'file' | 'folder') => {
     const name = type === 'folder' ? 'New Folder' : 'untitled.tex'
-    const newItem: FileItem = {
-      id: newId,
-      name,
-      path: `/${name}`,
-      type,
-      ...(type === 'folder' ? { children: [] } : {})
+    const projectRoot = fileManager.getProjectRoot()
+    const path = `${projectRoot}/${name}`
+
+    try {
+      if (type === 'folder') {
+        await fileManager.createDirectory(path)
+      } else {
+        await fileManager.createFile(path, '')
+      }
+      // FileSystemWatcher will automatically update the tree
+      setShowAddMenu(false)
+      // Set editing for the new item - use path as ID
+      setEditingNewId(`fs:${path}`)
+    } catch (e) {
+      console.error('Failed to create item:', e)
     }
-    onFilesChange([...files, newItem])
+  }
+
+  const uploadFileRef = useRef<HTMLInputElement>(null)
+
+  const handleUploadFiles = async (selectedFiles: FileList | null) => {
+    if (!selectedFiles || selectedFiles.length === 0) return
+    const projectRoot = fileManager.getProjectRoot()
+
+    for (const file of Array.from(selectedFiles)) {
+      try {
+        const buffer = await file.arrayBuffer()
+        const data = new Uint8Array(buffer)
+        const filePath = `${projectRoot}/${file.name}`
+        await fileSystem.writeBinary(filePath, data, { createParents: true })
+      } catch (err) {
+        console.error(`Failed to upload file ${file.name}:`, err)
+      }
+    }
+    await fileSystemWatcher.refresh()
     setShowAddMenu(false)
-    setEditingNewId(newId)
   }
 
   // ========================================
-  // Tree operations using structural sharing
+  // Tree operations using FileManager
   // ========================================
 
-  const deleteItem = (id: string) => {
-    const path = findIndexPath(files, id)
-    if (!path) return
-    onFilesChange(removeAtPath(files, path))
+  const deleteItem = async (id: string) => {
+    // Find the item to get its path
+    const item = findItemById(files, id)
+    if (!item) return
+
+    try {
+      if (item.type === 'folder') {
+        await fileManager.deleteDirectory(item.path)
+      } else {
+        await fileManager.deleteFile(item.path)
+      }
+      // FileSystemWatcher will automatically update the tree
+    } catch (e) {
+      console.error('Failed to delete item:', e)
+    }
   }
 
-  const renameItem = (id: string, newName: string) => {
-    const path = findIndexPath(files, id)
-    if (!path) return
+  const renameItem = async (id: string, newName: string) => {
+    // Find the item to get its path
+    const item = findItemById(files, id)
+    if (!item) return
 
-    const parentPath = computeParentPath(files, path)
-    const newFilePath = parentPath ? `${parentPath}/${newName}` : `/${newName}`
+    // Compute new path
+    const oldPath = item.path
+    const parentPath = oldPath.substring(0, oldPath.lastIndexOf('/'))
+    const newPath = `${parentPath}/${newName}`
 
-    onFilesChange(updateAtPath(files, path, item => ({ ...item, name: newName, path: newFilePath })))
+    try {
+      await fileManager.renameFile(oldPath, newPath)
+      // FileSystemWatcher will automatically update the tree
+    } catch (e) {
+      console.error('Failed to rename item:', e)
+    }
   }
 
-  const addChildItem = (parentId: string, type: 'file' | 'folder') => {
-    const path = findIndexPath(files, parentId)
-    if (!path) return
+  // Helper to find an item by ID
+  const findItemById = (items: FileItem[], id: string): FileItem | null => {
+    for (const item of items) {
+      if (item.id === id) return item
+      if (item.children) {
+        const found = findItemById(item.children, id)
+        if (found) return found
+      }
+    }
+    return null
+  }
 
-    const parent = getAtPath(files, path)
+  const addChildItem = async (parentId: string, type: 'file' | 'folder') => {
+    // Find the parent folder
+    const parent = findItemById(files, parentId)
     if (!parent || parent.type !== 'folder') return
 
     const name = type === 'folder' ? 'New Folder' : 'untitled.tex'
-    const newItem: FileItem = {
-      id: generateId(),
-      name,
-      path: `${parent.path}/${name}`,
-      type,
-      ...(type === 'folder' ? { children: [] } : {})
-    }
+    const childPath = `${parent.path}/${name}`
 
-    onFilesChange(insertAtPath(files, path, newItem))
+    try {
+      if (type === 'folder') {
+        await fileManager.createDirectory(childPath)
+      } else {
+        await fileManager.createFile(childPath, '')
+      }
+      // FileSystemWatcher will automatically update the tree
+      setEditingNewId(`fs:${childPath}`)
+    } catch (e) {
+      console.error('Failed to create child item:', e)
+    }
   }
 
-  const moveItem = (itemId: string, targetFolderId: string | null) => {
-    const sourcePath = findIndexPath(files, itemId)
-    if (!sourcePath) return
-
-    const itemToMove = getAtPath(files, sourcePath)
+  const moveItem = async (itemId: string, targetFolderId: string | null) => {
+    // Find the item to move
+    const itemToMove = findItemById(files, itemId)
     if (!itemToMove) return
 
-    let newFiles = removeAtPath(files, sourcePath)
-
+    // Determine new path
+    let newPath: string
     if (targetFolderId === null) {
-      newFiles = [...newFiles, itemToMove]
+      // Move to root
+      const projectRoot = fileManager.getProjectRoot()
+      newPath = `${projectRoot}/${itemToMove.name}`
     } else {
-      const targetPath = findIndexPath(newFiles, targetFolderId)
-      if (!targetPath) return
-
-      const targetFolder = getAtPath(newFiles, targetPath)
+      const targetFolder = findItemById(files, targetFolderId)
       if (!targetFolder || targetFolder.type !== 'folder') return
-
-      newFiles = insertAtPath(newFiles, targetPath, itemToMove)
+      newPath = `${targetFolder.path}/${itemToMove.name}`
     }
 
-    onFilesChange(newFiles)
+    try {
+      // Moving is implemented as rename in FileManager
+      await fileManager.renameFile(itemToMove.path, newPath)
+      // FileSystemWatcher will automatically update the tree
+    } catch (e) {
+      console.error('Failed to move item:', e)
+    }
   }
 
   const handleFileSelect = (file: FileItem) => {
@@ -716,14 +626,24 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
     const droppedFiles = Array.from(e.dataTransfer.files)
     if (droppedFiles.length === 0) return
 
-    const newItems: FileItem[] = droppedFiles.map(file => ({
-      id: generateId(),
-      name: file.name,
-      path: `/${file.name}`,
-      type: 'file' as const
-    }))
+    const projectRoot = fileManager.getProjectRoot()
 
-    onFilesChange([...files, ...newItems])
+    // Read and create each dropped file (binary-safe for images)
+    for (const file of droppedFiles) {
+      try {
+        const filePath = `${projectRoot}/${file.name}`
+        if (file.type.startsWith('image/') || /\.(png|jpe?g|gif|svg|webp|pdf|eps)$/i.test(file.name)) {
+          const buffer = await file.arrayBuffer()
+          await fileSystem.writeBinary(filePath, new Uint8Array(buffer), { createParents: true })
+        } else {
+          const content = await file.text()
+          await fileManager.createFile(filePath, content)
+        }
+      } catch (err) {
+        console.error(`Failed to import file ${file.name}:`, err)
+      }
+    }
+    await fileSystemWatcher.refresh()
   }
 
   const handleResizeStart = (e: React.MouseEvent) => {
@@ -795,12 +715,24 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
                   <FolderPlus size={14} />
                   New Folder
                 </button>
+                <button onClick={() => uploadFileRef.current?.click()}>
+                  <Image size={14} />
+                  Upload Image
+                </button>
               </div>
             )}
+            <input
+              ref={uploadFileRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/svg+xml,image/webp"
+              multiple
+              style={{ display: 'none' }}
+              onChange={(e) => { handleUploadFiles(e.target.files); e.target.value = '' }}
+            />
           </div>
         </div>
 
-        <div className="sidebar-files">
+        <div className="sidebar-files" onContextMenu={handleFilesContextMenu}>
           {files.length === 0 ? (
             <div className="sidebar-empty">
               <p>Drop files here, or</p>
@@ -815,339 +747,71 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
                 key={item.id}
                 item={item}
                 depth={0}
-                onDelete={deleteItem}
                 onRename={renameItem}
                 onAddChild={addChildItem}
                 onSelect={handleFileSelect}
                 onMoveItem={moveItem}
+                onContextMenu={handleItemContextMenu}
                 selectedId={selectedFileId}
                 draggedId={draggedId}
                 onDragStart={setDraggedId}
                 onDragEnd={() => setDraggedId(null)}
                 editingNewId={editingNewId}
                 onEditingComplete={() => setEditingNewId(null)}
+                newFileIds={newFileIds}
               />
             ))
           )}
         </div>
 
-        {/* Integrations Section - unified wrapper */}
-        <div className="sidebar-integrations">
-          <div className="integrations-header">Integrations</div>
-          <div className="integration-items">
-            {/* Git Sync */}
-            <div className="sidebar-git-section" ref={gitSetupRef}>
-              {gitStatus.isConnected ? (
-            <div className={`git-connected-inline ${showGitSetup ? 'expanded' : ''}`}>
+        {contextMenu && (
+          <div
+            className="sidebar-context-menu"
+            style={{ top: contextMenu.y, left: contextMenu.x }}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            {contextMenu.itemId ? (
+              <button className="destructive" onClick={() => { deleteItem(contextMenu.itemId!); setContextMenu(null) }}>
+                <Trash2 size={14} /> Delete
+              </button>
+            ) : (
+              <>
+                <button onClick={() => { addItem('file'); setContextMenu(null) }}>
+                  <FilePlus size={14} /> New File
+                </button>
+                <button onClick={() => { addItem('folder'); setContextMenu(null) }}>
+                  <FolderPlus size={14} /> New Folder
+                </button>
+                <button onClick={() => { uploadFileRef.current?.click(); setContextMenu(null) }}>
+                  <Image size={14} /> Upload Image
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
+        {/* Footer - Sync, Integrations */}
+        <div className="sidebar-footer">
+          <div className="sidebar-footer-row">
+            {(gitStatus.isConnected || zoteroStatus.connected) && (
               <button
-                className={`git-status-btn ${gitStatus.isSyncing ? 'syncing' : ''}`}
-                onClick={() => setShowGitSetup(!showGitSetup)}
+                className="sync-btn-compact"
+                onClick={() => {
+                  if (gitStatus.isConnected) handleSyncNow()
+                  if (zoteroStatus.connected) handleZoteroSync()
+                }}
+                disabled={gitStatus.isSyncing || zoteroStatus.syncing}
+                title="Sync"
               >
-                <div className="git-status-info">
-                  <Github size={14} />
-                  <span className="git-status-text">
-                    {GitService.getConfig()?.repoUrl || 'repo'}
-                  </span>
-                </div>
-                {gitStatus.isSyncing ? (
-                  <RefreshCw size={12} className="git-sync-spinner" />
-                ) : gitStatus.error ? (
-                  <AlertCircle size={12} className="git-error-icon" />
-                ) : gitStatus.behind > 0 ? (
-                  <span className="git-behind-badge" title="Remote has changes">↓</span>
-                ) : null}
-                <ChevronRight size={12} className={`git-setup-chevron ${showGitSetup ? 'open' : ''}`} />
+                <RefreshCw size={14} className={(gitStatus.isSyncing || zoteroStatus.syncing) ? 'spinning' : ''} />
               </button>
-
-              <div className="git-settings-content">
-                <div className="git-settings-inner">
-                  {gitStatus.error && (
-                    <div className="git-error-banner">
-                      {gitStatus.error}
-                    </div>
-                  )}
-
-                  <div className="git-setting-row">
-                    <span className="git-setting-label">Branch</span>
-                    <input
-                      type="text"
-                      className="git-branch-input"
-                      placeholder={GitService.getConfig()?.branch || 'main'}
-                      value={branchInput}
-                      onChange={(e) => setBranchInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleBranchSwitch()
-                        } else if (e.key === 'Escape') {
-                          setBranchInput('')
-                          ;(e.target as HTMLInputElement).blur()
-                        }
-                      }}
-                      onBlur={handleBranchSwitch}
-                      disabled={isSwitchingBranch}
-                    />
-                  </div>
-
-                  <div className="git-setting-row">
-                    <div className="git-setting-label-with-info">
-                      <span className="git-setting-label">Auto-push</span>
-                      <button
-                        className="git-info-btn"
-                        onClick={() => setShowAutoPushInfo(!showAutoPushInfo)}
-                        onBlur={() => setTimeout(() => setShowAutoPushInfo(false), 150)}
-                      >
-                        <Info size={12} />
-                      </button>
-                      {showAutoPushInfo && (
-                        <div className="git-info-popover">
-                          Automatically pushes changes every 5 minutes when enabled
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      className={`git-toggle ${gitConfig.autoSync ? 'active' : ''}`}
-                      onClick={() => setGitConfig(prev => ({ ...prev, autoSync: !prev.autoSync }))}
-                    >
-                      <div className="git-toggle-knob" />
-                    </button>
-                  </div>
-
-                  <div className="git-setting-row">
-                    <span className="git-setting-label">On conflict</span>
-                    <select
-                      className="git-setting-select"
-                      value={gitConfig.conflictResolution}
-                      onChange={(e) => setGitConfig(prev => ({ ...prev, conflictResolution: e.target.value as GitConfig['conflictResolution'] }))}
-                    >
-                      <option value="newest">Keep newest</option>
-                      <option value="local">Keep local</option>
-                      <option value="remote">Keep remote</option>
-                    </select>
-                  </div>
-
-                  {gitStatus.lastSync && !gitStatus.hasConflict && (
-                    <div className="git-last-sync-info">
-                      Last synced {new Date(gitStatus.lastSync).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                    </div>
-                  )}
-
-                  {gitStatus.hasConflict ? (
-                    <div className="git-conflict-section">
-                      <div className="git-conflict-message">
-                        Local and remote both have changes
-                      </div>
-                      <div className="git-conflict-actions">
-                        <button
-                          className="git-conflict-btn keep-local"
-                          onClick={() => GitService.forcePush()}
-                          disabled={gitStatus.isSyncing}
-                        >
-                          Keep local
-                        </button>
-                        <button
-                          className="git-conflict-btn keep-remote"
-                          onClick={() => GitService.forcePull()}
-                          disabled={gitStatus.isSyncing}
-                        >
-                          Keep remote
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="git-actions-row">
-                      <button
-                        className="git-sync-btn"
-                        onClick={handleSyncNow}
-                        disabled={gitStatus.isSyncing}
-                      >
-                        <RefreshCw size={12} className={gitStatus.isSyncing ? 'git-sync-spinner' : ''} />
-                        {gitStatus.isSyncing ? 'Syncing...' : 'Sync now'}
-                      </button>
-                      <button className="git-disconnect-btn" onClick={handleGitDisconnect}>
-                        Disconnect
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className={`git-setup-inline ${showGitSetup ? 'expanded' : ''}`}>
-              <button className="git-setup-btn" onClick={() => setShowGitSetup(!showGitSetup)}>
-                <Github size={14} />
-                <span>Connect to GitHub</span>
-                <ChevronRight size={12} className={`git-setup-chevron ${showGitSetup ? 'open' : ''}`} />
-              </button>
-
-              <div className="git-setup-content">
-                {setupStep === 'connect' && (
-                  <div className="git-config-form">
-                    <input
-                      ref={repoInputRef}
-                      type="text"
-                      className="git-input"
-                      placeholder="username/repository"
-                      value={gitConfig.repoUrl}
-                      onChange={(e) => setGitConfig(prev => ({ ...prev, repoUrl: e.target.value }))}
-                    />
-                    <input
-                      type="password"
-                      className="git-input"
-                      placeholder="Personal access token"
-                      value={gitConfig.token}
-                      onChange={(e) => setGitConfig(prev => ({ ...prev, token: e.target.value }))}
-                    />
-                    <a
-                      href="https://github.com/settings/tokens/new?description=Siglum&scopes=repo"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="git-token-link"
-                    >
-                      Generate token on GitHub
-                    </a>
-                    <button
-                      className="git-connect-btn"
-                      onClick={handleGitConnect}
-                      disabled={!gitConfig.repoUrl?.trim() || !gitConfig.token?.trim() || isConnecting}
-                    >
-                      {isConnecting ? 'Connecting...' : 'Connect'}
-                    </button>
-                  </div>
-                )}
-
-                {setupStep === 'create-repo' && (
-                  <div className="git-create-repo">
-                    <p className="git-create-repo-message">
-                      Repository not found. Create it?
-                    </p>
-                    <div className="git-create-repo-actions">
-                      <button
-                        className="git-create-repo-btn secondary"
-                        onClick={() => {
-                          setSetupStep('connect')
-                          setPendingRepoName('')
-                        }}
-                        disabled={isConnecting}
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        className="git-create-repo-btn primary"
-                        onClick={handleCreateRepo}
-                        disabled={isConnecting}
-                      >
-                        {isConnecting ? 'Creating...' : `Create ${pendingRepoName}`}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {setupStep === 'done' && (
-                  <div className="git-setup-done">
-                    <Check size={20} className="git-check-icon" />
-                    <span>Connected</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
+            )}
+            <button className="integrations-link" onClick={onOpenIntegrations} title="Integrations">
+              <Plug size={14} />
+              {!gitStatus.isConnected && !zoteroStatus.connected && <span>Integrations</span>}
+            </button>
+          </div>
         </div>
-
-        {/* Zotero Section */}
-        <div className="sidebar-zotero-section">
-          {zoteroStatus.connected ? (
-            <div className={`zotero-connected-inline ${showZoteroSetup ? 'expanded' : ''}`}>
-              <button
-                className="zotero-status-btn"
-                onClick={() => setShowZoteroSetup(!showZoteroSetup)}
-              >
-                <div className="zotero-status-info">
-                  <ZoteroIcon size={14} />
-                  <span className="zotero-status-text">
-                    Zotero ({zoteroStatus.itemCount} cached)
-                  </span>
-                </div>
-                <ChevronRight size={12} className={`zotero-setup-chevron ${showZoteroSetup ? 'open' : ''}`} />
-              </button>
-
-              <div className="zotero-settings-content">
-                <div className="zotero-settings-inner">
-                  <div className="zotero-setting-row">
-                    <span className="zotero-setting-label">User ID</span>
-                    <span className="zotero-setting-value">{zoteroStatus.userId}</span>
-                  </div>
-                  <div className="zotero-actions-row">
-                    <button
-                      className="zotero-sync-btn"
-                      onClick={handleZoteroSync}
-                      disabled={zoteroStatus.syncing}
-                    >
-                      <RefreshCw size={12} className={zoteroStatus.syncing ? 'zotero-sync-spinner' : ''} />
-                      {zoteroStatus.syncing ? 'Syncing...' : 'Sync now'}
-                    </button>
-                    <button className="zotero-disconnect-btn" onClick={handleZoteroDisconnect}>
-                      Disconnect
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className={`zotero-setup-inline ${showZoteroSetup ? 'expanded' : ''}`}>
-              <button className="zotero-setup-btn" onClick={() => setShowZoteroSetup(!showZoteroSetup)}>
-                <ZoteroIcon size={14} />
-                <span>Connect Zotero</span>
-                <ChevronRight size={12} className={`zotero-setup-chevron ${showZoteroSetup ? 'open' : ''}`} />
-              </button>
-
-              <div className="zotero-setup-content">
-                {zoteroSetupStep === 'connect' && (
-                  <div className="zotero-config-form">
-                    <input
-                      ref={zoteroUserIdInputRef}
-                      type="text"
-                      className="zotero-input"
-                      placeholder="User ID (from zotero.org/settings/keys)"
-                      value={zoteroUserId}
-                      onChange={(e) => setZoteroUserId(e.target.value)}
-                    />
-                    <input
-                      type="password"
-                      className="zotero-input"
-                      placeholder="API Key"
-                      value={zoteroApiKey}
-                      onChange={(e) => setZoteroApiKey(e.target.value)}
-                    />
-                    <a
-                      href="https://www.zotero.org/settings/keys/new"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="zotero-key-link"
-                    >
-                      Get API key from Zotero
-                    </a>
-                    <button
-                      className="zotero-connect-btn"
-                      onClick={handleZoteroConnect}
-                      disabled={!zoteroUserId.trim() || !zoteroApiKey.trim() || isZoteroConnecting}
-                    >
-                      {isZoteroConnecting ? 'Connecting...' : 'Connect'}
-                    </button>
-                  </div>
-                )}
-
-                {zoteroSetupStep === 'done' && (
-                  <div className="zotero-setup-done">
-                    <Check size={20} className="zotero-check-icon" />
-                    <span>Connected</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-        </div>{/* integration-items */}
-        </div>{/* sidebar-integrations */}
       </div>
     </div>
   )

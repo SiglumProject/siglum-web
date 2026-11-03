@@ -207,6 +207,18 @@ function parseLine(
     finalizeError(state, diagnostics)
   }
 
+  // --file-line-error reports the actual source file, including nested inputs.
+  const locatedError = line.match(/^(.+?):(\d+):\s*(.+)$/)
+  if (locatedError) {
+    finalizeError(state, diagnostics)
+    state.currentError = {
+      type: 'error', file: locatedError[1], line: Number(locatedError[2]),
+      message: locatedError[3].replace(/^!\s*/, ''),
+    }
+    state.expectingErrorLine = true
+    return
+  }
+
   // Check for errors (must start with !)
   if (line[0] === '!') {
     finalizeError(state, diagnostics)
@@ -466,6 +478,15 @@ export class StreamingLogParser {
     return formatDiagnostics(this.diagnostics)
   }
 
+  /** Finalize any pending error (call after feeding all lines from a batch) */
+  finalize(): void {
+    const prevCount = this.diagnostics.length
+    finalizeError(this.state, this.diagnostics)
+    if (this.diagnostics.length > prevCount) {
+      this.notifyCallbacks()
+    }
+  }
+
   clear(): void {
     this.state = createParserState()
     this.diagnostics = []
@@ -475,7 +496,7 @@ export class StreamingLogParser {
   }
 
   private notifyCallbacks(): void {
-    const diags = this.diagnostics
+    const diags = [...this.diagnostics]
     this.callbacks.forEach(cb => cb(diags))
   }
 }

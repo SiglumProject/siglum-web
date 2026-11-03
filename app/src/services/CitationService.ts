@@ -1,8 +1,7 @@
 /**
- * CitationService - Thin wrapper for citation providers from busytex-lazy
+ * CitationService - Thin wrapper for citation providers
  *
- * Imports the citation system from siglum-engine (via busytex-lazy) and provides
- * React-friendly hooks and utilities.
+ * Uses the local citation system and provides React-friendly hooks and utilities.
  */
 
 import {
@@ -10,12 +9,11 @@ import {
   initCitations,
   type ZoteroProvider,
   type CitationManager,
-} from 'busytex-lazy';
+} from '../lib/citations';
 
 // API endpoint for Zotero proxy
-const API_BASE = import.meta.env.DEV
-  ? 'http://localhost:8787'
-  : 'https://siglum-api.vtp-ips.workers.dev';
+const API_BASE = import.meta.env.VITE_API_BASE
+  || (import.meta.env.DEV ? new URL('/citations', window.location.origin).href.replace(/\/$/, '') : 'https://packages.siglum.org');
 
 // Types for UI
 export interface ZoteroStatus {

@@ -2,13 +2,13 @@
  * ProjectSearcher - Search across project files
  *
  * Searches file names and content in the current project.
- * Uses ProjectStore for file tree and GitService for reading content.
+ * Uses ProjectStore for the file tree and FileReaderService for local and Git files.
  * Content search is offloaded to a Web Worker to prevent UI blocking.
  */
 
 import ProjectStore from './ProjectStore'
 import type { FileItem } from './ProjectStore'
-import GitService from './GitService'
+import FileReaderService from './FileReaderService'
 import type { SearchMessage, SearchResultMessage, ContentSearchResult, FileData } from '../workers/search.worker'
 
 export interface FileSearchResult {
@@ -41,8 +41,6 @@ const TEXT_EXTENSIONS = new Set([
 ])
 
 class ProjectSearcher {
-  private contentCache: Map<string, string> = new Map()
-  private cacheTimestamp: number = 0
   private readonly CACHE_TTL = 300000 // 5 minutes (was 30s - too short for real usage)
 
   // File list cache - avoid flattening tree on every search
@@ -59,6 +57,10 @@ class ProjectSearcher {
     resolve: (results: ContentSearchResult[]) => void
     reject: (error: Error) => void
   }> = new Map()
+
+  constructor() {
+    ProjectStore.subscribe(() => this.clearCache())
+  }
 
   /**
    * Get or create the search worker
@@ -138,10 +140,7 @@ class ProjectSearcher {
       caseSensitive = false
     } = options
 
-    if (!query.trim()) {
-      return []
-    }
-
+    query = query.trim()
     const allFiles = this.getCachedFileList()
     const results: FileSearchResult[] = []
     const searchQuery = caseSensitive ? query : query.toLowerCase()
@@ -154,6 +153,10 @@ class ProjectSearcher {
           return ext && extensionSet.has(ext)
         })
       : allFiles
+
+    if (!query) {
+      return filesToSearch.slice(0, maxResults).map(file => ({ file, matchType: 'name', score: 0 }))
+    }
 
     // Search file names first (fast)
     for (const file of filesToSearch) {
@@ -185,7 +188,7 @@ class ProjectSearcher {
     }
 
     // Search file contents if enabled - offloaded to worker
-    if (searchContent && GitService.getStatus().isConnected) {
+    if (searchContent) {
       const textFiles = filesToSearch.filter(f => {
         const ext = this.getExtension(f.path)
         return ext && TEXT_EXTENSIONS.has(ext)
@@ -317,35 +320,15 @@ class ProjectSearcher {
       .slice(0, maxResults)
   }
 
-  /**
-   * Get file content with caching
-   */
-  private async getFileContent(path: string): Promise<string | null> {
-    // Invalidate cache if stale
-    if (Date.now() - this.cacheTimestamp > this.CACHE_TTL) {
-      this.contentCache.clear()
-      this.cacheTimestamp = Date.now()
-    }
-
-    // Return cached content if available
-    if (this.contentCache.has(path)) {
-      return this.contentCache.get(path)!
-    }
-
-    // Read and cache content
-    const content = await GitService.readFile(path)
-    if (content !== null) {
-      this.contentCache.set(path, content)
-    }
-    return content
+  /** Read current saved content; the project tree changes on every save. */
+  private getFileContent(path: string): Promise<string | null> {
+    return FileReaderService.readFile(path)
   }
 
   /**
    * Clear all caches
    */
   clearCache(): void {
-    this.contentCache.clear()
-    this.cacheTimestamp = 0
     this.fileListCache = null
     this.fileListTimestamp = 0
     this.extensionCache.clear()

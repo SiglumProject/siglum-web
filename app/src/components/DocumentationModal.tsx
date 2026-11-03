@@ -12,7 +12,12 @@ import {
   RefreshCw,
   Plug,
   Users,
-  Share2
+  Share2,
+  MoveLeft,
+  MoveRight,
+  Menu,
+  Play,
+  Search
 } from 'lucide-react'
 import ZoteroIcon from './icons/ZoteroIcon'
 import GitService, { type GitStatus, type GitConfig } from '../services/GitService'
@@ -182,21 +187,21 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                   <h3>Navigation</h3>
                   <div className="gesture-list">
                     <div className="gesture-item">
-                      <div className="gesture-icon">👆</div>
+                      <div className="gesture-icon"><MoveLeft size={20} aria-hidden="true" /></div>
                       <div className="gesture-text">
-                        <strong>Swipe left</strong>
-                        <span>View compiled PDF</span>
+                        <strong>Tap Preview, or hold to peek</strong>
+                        <span>Hold to see the PDF near your cursor. Release to keep writing in the same place.</span>
                       </div>
                     </div>
                     <div className="gesture-item">
-                      <div className="gesture-icon">👆</div>
+                      <div className="gesture-icon"><MoveRight size={20} aria-hidden="true" /></div>
                       <div className="gesture-text">
-                        <strong>Swipe right</strong>
-                        <span>Back to editor</span>
+                        <strong>Tap Source</strong>
+                        <span>Return from the full PDF to your editor.</span>
                       </div>
                     </div>
                     <div className="gesture-item">
-                      <div className="gesture-icon">☰</div>
+                      <div className="gesture-icon"><Menu size={20} aria-hidden="true" /></div>
                       <div className="gesture-text">
                         <strong>Tap hamburger menu</strong>
                         <span>Open sidebar for files & settings</span>
@@ -209,14 +214,14 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                   <h3>Quick Actions</h3>
                   <div className="gesture-list">
                     <div className="gesture-item">
-                      <div className="gesture-icon">▶</div>
+                      <div className="gesture-icon"><Play size={20} aria-hidden="true" /></div>
                       <div className="gesture-text">
                         <strong>Tap compile button</strong>
                         <span>Build your PDF</span>
                       </div>
                     </div>
                     <div className="gesture-item">
-                      <div className="gesture-icon">🔍</div>
+                      <div className="gesture-icon"><Search size={20} aria-hidden="true" /></div>
                       <div className="gesture-text">
                         <strong>Tap search icon</strong>
                         <span>Open command palette</span>
@@ -225,7 +230,14 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                   </div>
                 </div>
 
-                <p className="doc-note">Tip: The editor starts in focus. Swipe left anytime to see your PDF.</p>
+                <div className="shortcuts-group">
+                  <h3>Writing on your phone</h3>
+                  <p>Tap More or drag upward from the dock to reveal labeled tools. Insert builds equations, tables, images, citations, and headings with live examples and editable LaTeX.</p>
+                  <p>Open the PDF lens from More to keep a small preview beside your source. Drag its handle to move it; expand it for the full page.</p>
+                  <p>Compile errors appear as cards with a source excerpt. Go there moves to the problem, Next error steps through the list, and Full log opens the complete compiler output.</p>
+                </div>
+
+                <p className="doc-note">The strip above the dock follows your cursor: math tools in equations, bibliography keys in citations, and project files in filename arguments.</p>
               </>
             ) : (
               <>
@@ -406,60 +418,31 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
           <div className="doc-content">
             <h2>Getting Feedback</h2>
             <p className="doc-lead">
-              Send someone a link. They comment on your PDF. No accounts, no friction.
+              We're building a way to share your PDF for comments. Coming soon.
             </p>
 
             <div className="collab-section">
-              <h3>How it works</h3>
+              <h3>How it will work</h3>
               <p>
-                Click <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: '22px', height: '22px', background: 'rgba(232, 227, 211, 0.1)', borderRadius: '4px', margin: '0 4px', verticalAlign: 'middle' }}><MessageCircle size={12} /></span> in
-                the PDF viewer to create a snapshot. A link is copied to your clipboard
-                that you can send to your advisor, collaborator, or anyone else who
-                needs to review it. They can leave comments directly on the document.
+                You'll be able to create a snapshot of your PDF and share a link with
+                your advisor, collaborator, or anyone who needs to review it. They'll
+                be able to leave comments directly on the document.
               </p>
             </div>
 
             <div className="collab-section">
-              <h3>Versions</h3>
+              <h3>Your source stays private</h3>
               <p>
-                Each share is a snapshot, and comments stay attached to the version
-                they were made on. If your reviewer says "fix the typo on page 3,"
-                you'll always know which page 3 they meant.
-              </p>
-              <p>
-                When you make changes and want fresh feedback, create a new share.
-                Previous versions stick around so you can compare.
+                Sharing will only upload a PDF snapshot for reviewers to see. Your
+                source files will never leave your browser.
               </p>
             </div>
 
             <div className="collab-section">
-              <h3>Privacy</h3>
+              <h3>For now: use GitHub</h3>
               <p>
-                Shares are private and only visible to people you send the link to.
-                There's no public directory or way to discover them.
-              </p>
-              <p>
-                Creating a share requires signing in with GitHub so we can associate
-                it with your account. Leaving a comment only requires an email, which
-                is not an account and won't be used to contact you. We ask for it solely
-                so you can <a href="/privacy/delete" className="text-link">request deletion</a> of
-                your data later.
-              </p>
-              <p>
-                Siglum is <a href="https://github.com/SiglumProject" className="text-link">fully open source</a> if
-                you want to see how any of this works.
-              </p>
-            </div>
-
-            <div className="collab-section">
-              <h3>When to use this vs. GitHub</h3>
-              <p>
-                Sharing is for feedback: one person writes, others comment. It's great
-                for getting a draft reviewed by an advisor or colleague.
-              </p>
-              <p>
-                GitHub is for co-authoring: multiple people editing the same project.
-                Use that when you're writing together.
+                Until sharing is ready, you can collaborate through GitHub. Connect
+                a repository and anyone with access can work on the same project.
               </p>
             </div>
           </div>
@@ -485,6 +468,14 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                 <span>Zotero</span>
                 {zoteroStatus.connected && <span className="integrations-nav-dot" />}
               </button>
+              <a
+                href="https://github.com/SiglumProject/siglum-web/issues/new?labels=integration&title=Integration%20suggestion:"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="integrations-suggest-link"
+              >
+                Suggest an integration
+              </a>
             </div>
 
             <div className="integrations-content">
@@ -710,54 +701,53 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
             <p className="doc-lead">Questions people sometimes ask.</p>
 
             <div className="faq-list">
-              <div className="faq-item">
-                <h3>Do you store my documents on your server?</h3>
+              <details className="faq-item">
+                <summary>Do you store my documents on your server?</summary>
                 <p>
-                  Your source files stay in your browser and never touch our servers.
-                  Compilation happens locally on your machine. The only time we store
-                  anything is when you create a share, which uploads a snapshot of your
-                  PDF so reviewers can see it. You can delete a share at any time and
-                  the PDF is immediately queued for deletion.
+                  No. Your source files stay in your browser and never touch our servers.
+                  Compilation happens locally on your machine. We're working on a sharing
+                  feature that will let you send a PDF snapshot for feedback, but even
+                  then your source files will remain local.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Is my work saved?</h3>
+              <details className="faq-item">
+                <summary>Is my work saved?</summary>
                 <p>
                   Yes, automatically. Everything saves to your browser's local storage,
                   and if you've connected GitHub it will sync there too.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Can I use [obscure package]?</h3>
+              <details className="faq-item">
+                <summary>Can I use [obscure package]?</summary>
                 <p>
                   Probably. We bundle the most common packages, and anything else gets
                   fetched from CTAN automatically the first time you use it.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Can I use custom fonts?</h3>
+              <details className="faq-item">
+                <summary>Can I use custom fonts?</summary>
                 <p>
                   Yes. Drop a .ttf or .otf file in your project and use fontspec. We
                   include Latin Modern, TeX Gyre, and STIX2 by default. Custom fonts
                   require XeLaTeX.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>How is this different from Overleaf?</h3>
+              <details className="faq-item">
+                <summary>How is this different from Overleaf?</summary>
                 <p>
                   Overleaf sends your documents to their servers to compile. Siglum
                   compiles everything locally, so nothing leaves your machine. It's
                   usually faster since there's no network round-trip, works offline,
                   and your documents stay private.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Is this free?</h3>
+              <details className="faq-item">
+                <summary>Is this free?</summary>
                 <p>
                   Yes, and it will stay that way. We've put a lot of thought into keeping
                   costs low. You can read about the <a href="/docs/architecture" target="_blank" rel="noopener noreferrer" className="text-link">architecture</a> if
@@ -769,40 +759,40 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                   you can <a href="https://github.com/sponsors/SiglumProject" target="_blank" rel="noopener noreferrer" className="text-link">sponsor the project on GitHub</a>.
                   No pressure though.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>What engines are supported?</h3>
+              <details className="faq-item">
+                <summary>What engines are supported?</summary>
                 <p>
                   pdfLaTeX and XeLaTeX. XeLaTeX is better for Unicode and custom fonts,
                   but pdfLaTeX works fine for most documents.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Why is the first compile slow?</h3>
+              <details className="faq-item">
+                <summary>Why is the first compile slow?</summary>
                 <p>
                   The first compilation downloads the TeX engine (~15MB) and any packages
                   you need. After that, compiles are fast since everything is cached locally.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Does it work offline?</h3>
+              <details className="faq-item">
+                <summary>Does it work offline?</summary>
                 <p>
                   Yes. For the best offline experience, we recommend the <a href="/download" className="text-link">Siglum desktop app</a> for
                   Windows, Mac, and Linux. It's small (~5MB) and efficient, and if you
                   sign in with GitHub your work syncs automatically when you're back online.
                 </p>
-              </div>
+              </details>
 
-              <div className="faq-item">
-                <h3>Is this open source?</h3>
+              <details className="faq-item">
+                <summary>Is this open source?</summary>
                 <p>
                   Yes. The editor is MIT licensed and the underlying TeX distribution is
                   a mix of LPPL, GPL, and public domain, same as any TeX installation.
                 </p>
-              </div>
+              </details>
             </div>
           </div>
         )
@@ -820,7 +810,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                 you expected. Screenshots help a lot.
               </p>
               <a
-                href="https://github.com/siglum/siglum/issues/new"
+                href="https://github.com/SiglumProject/siglum-web/issues/new"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="help-link"
@@ -863,8 +853,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
             <div className="help-section">
               <h3>Privacy</h3>
               <p>
-                Your documents stay in your browser unless you explicitly create a
-                share. We can't see your source files.
+                Your documents stay in your browser. We can't see your source files.
               </p>
               <p>
                 We use Cloudflare Analytics to see basic usage stats like page views.
@@ -894,10 +883,11 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
     >
       <div className="doc-modal-container">
         <div className="doc-sidebar">
-          <nav className="doc-nav">
+          <nav className="doc-nav" aria-label="Help topics">
             {tabs.map(tab => (
               <button
                 key={tab.id}
+                aria-current={activeTab === tab.id ? 'page' : undefined}
                 className={`doc-nav-item ${activeTab === tab.id ? 'active' : ''}`}
                 onClick={() => {
                   setActiveTab(tab.id)
@@ -910,7 +900,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
             ))}
           </nav>
         </div>
-        <div className="doc-main">
+        <div className="doc-main" key={activeTab}>
           {renderContent()}
         </div>
       </div>

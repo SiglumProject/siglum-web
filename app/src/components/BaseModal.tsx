@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import './BaseModal.css';
+import { X } from 'lucide-react';
 
 interface BaseModalProps {
   isOpen: boolean;
@@ -28,6 +29,8 @@ const BaseModal: React.FC<BaseModalProps> = ({
 }) => {
   const [internalClosing, setInternalClosing] = useState(false);
 
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   // Handle close with animation
   const handleClose = useCallback(() => {
     setInternalClosing(true);
@@ -42,6 +45,33 @@ const BaseModal: React.FC<BaseModalProps> = ({
     if (isOpen) {
       setInternalClosing(false);
     }
+  }, [isOpen]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const dialog = dialogRef.current;
+    const focusable = () => Array.from(dialog?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), a[href], input:not([disabled]), select, textarea, summary, [tabindex="0"]'
+    ) ?? []).filter(element => element.getClientRects().length > 0);
+    (focusable()[0] ?? dialog)?.focus();
+    const trapFocus = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      const first = items[0] ?? dialog;
+      const last = items[items.length - 1] ?? dialog;
+      if (!dialog?.contains(document.activeElement) ||
+          (event.shiftKey && document.activeElement === first) ||
+          (!event.shiftKey && document.activeElement === last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+    };
+    document.addEventListener('keydown', trapFocus);
+    return () => {
+      document.removeEventListener('keydown', trapFocus);
+      if (previous?.isConnected) previous.focus();
+    };
   }, [isOpen]);
 
   // Handle escape key
@@ -77,6 +107,11 @@ const BaseModal: React.FC<BaseModalProps> = ({
       <div 
         className={`base-modal ${className}`}
         style={{ maxWidth }}
+        ref={dialogRef}
+        tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
       >
         {!hideHeader && (
           <div className="base-modal-header">
@@ -84,8 +119,8 @@ const BaseModal: React.FC<BaseModalProps> = ({
               {headerContent}
               <h2>{title}</h2>
             </div>
-            <button className="base-modal-close-button" onClick={handleClose}>
-              ✕
+            <button className="base-modal-close-button" aria-label="Close dialog" onClick={handleClose}>
+              <X size={18} aria-hidden="true" />
             </button>
           </div>
         )}

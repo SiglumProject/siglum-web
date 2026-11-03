@@ -1,15 +1,18 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import EventBus from '../services/EventBus'
 
+type DocumentationTab = 'guide' | 'collaboration' | 'sharing' | 'integrations' | 'faq' | 'support'
+
 interface UseModalsReturn {
   showCommandPalette: boolean
   isClosingCommandPalette: boolean
   showDocumentation: boolean
   isClosingDocumentation: boolean
   documentationOpenedFromPalette: boolean
+  documentationDefaultTab: DocumentationTab
   openCommandPalette: () => void
   closeCommandPalette: () => void
-  openDocumentation: (fromPalette?: boolean) => void
+  openDocumentation: (fromPalette?: boolean, tab?: DocumentationTab) => void
   closeDocumentation: () => void
   backFromDocumentation: () => void
   setShowCommandPalette: React.Dispatch<React.SetStateAction<boolean>>
@@ -21,6 +24,7 @@ export function useModals(): UseModalsReturn {
   const [showDocumentation, setShowDocumentation] = useState(false)
   const [isClosingDocumentation, setIsClosingDocumentation] = useState(false)
   const [documentationOpenedFromPalette, setDocumentationOpenedFromPalette] = useState(false)
+  const [documentationDefaultTab, setDocumentationDefaultTab] = useState<DocumentationTab>('guide')
 
   // Track timeout IDs to prevent memory leaks on unmount
   const timeoutRefs = useRef<Set<ReturnType<typeof setTimeout>>>(new Set())
@@ -51,15 +55,18 @@ export function useModals(): UseModalsReturn {
   }, [])
 
   // Listen for toggleHelp event from editor toolbar
+  const showDocumentationRef = useRef(showDocumentation)
+  showDocumentationRef.current = showDocumentation
+  const closeDocRef = useRef<() => void>(() => {})
   useEffect(() => {
     return EventBus.on('toggleHelp', () => {
-      if (showDocumentation) {
-        closeDocumentation()
+      if (showDocumentationRef.current) {
+        closeDocRef.current()
       } else {
         setShowDocumentation(true)
       }
     })
-  }, [showDocumentation])
+  }, [])
 
   const openCommandPalette = useCallback(() => {
     setIsClosingCommandPalette(false)
@@ -74,7 +81,8 @@ export function useModals(): UseModalsReturn {
     }, 200)
   }, [safeTimeout])
 
-  const openDocumentation = useCallback((fromPalette: boolean = false) => {
+  const openDocumentation = useCallback((fromPalette: boolean = false, tab: DocumentationTab = 'guide') => {
+    setDocumentationDefaultTab(tab)
     if (fromPalette) {
       setDocumentationOpenedFromPalette(true)
       // Close command palette with animation first
@@ -97,6 +105,7 @@ export function useModals(): UseModalsReturn {
       setDocumentationOpenedFromPalette(false)
     }, 200)
   }, [safeTimeout])
+  closeDocRef.current = closeDocumentation
 
   const backFromDocumentation = useCallback(() => {
     setIsClosingDocumentation(true)
@@ -114,6 +123,7 @@ export function useModals(): UseModalsReturn {
     showDocumentation,
     isClosingDocumentation,
     documentationOpenedFromPalette,
+    documentationDefaultTab,
     openCommandPalette,
     closeCommandPalette,
     openDocumentation,

@@ -1,10 +1,14 @@
 .project-sidebar {
   position: relative;
+  z-index: 1;
   height: 100%;
   display: flex;
   flex-shrink: 0;
-  background: var(--color-base);
-  border-right: 1px solid var(--color-border);
+  background: rgba(26, 22, 20, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(232, 227, 211, 0.03);
+  border-right: 1px solid rgba(232, 227, 211, 0.08);
   box-sizing: border-box;
 }
 
@@ -32,18 +36,18 @@
 
 .sidebar-resize-handle:hover::before {
   background: var(--color-accent);
-  box-shadow: 0 0 8px rgba(181, 133, 106, 0.3);
+  box-shadow: 0 0 8px rgba(217, 119, 87, 0.3);
 }
 
 /* External file drag over */
 .project-sidebar.drag-over {
-  background: rgba(184, 149, 110, 0.03);
+  background: rgba(217, 119, 87, 0.03);
 }
 
 .project-sidebar.drag-over .sidebar-files {
-  background: rgba(184, 149, 110, 0.02);
+  background: rgba(217, 119, 87, 0.02);
   border-radius: 8px;
-  outline: 1px dashed rgba(184, 149, 110, 0.3);
+  outline: 1px dashed rgba(217, 119, 87, 0.3);
   outline-offset: -4px;
 }
 
@@ -89,12 +93,12 @@
   padding-top: 9px;
   transition: all 0.2s ease;
   z-index: 10;
-  background: var(--color-base-darker);
+  background: rgba(26, 22, 20, 0.5);
   box-sizing: border-box;
 }
 
 .sidebar-collapsed-zone:hover {
-  background: var(--color-base-lighter);
+  background: rgba(34, 31, 28, 0.7);
 }
 
 .sidebar-collapsed-zone:hover .expand-icon {
@@ -122,8 +126,8 @@
   justify-content: space-between;
   height: 32px;
   padding: 0 8px 0 4px;
-  background: var(--color-base-darker);
-  border-bottom: 1px solid var(--color-border);
+  background: rgba(20, 17, 14, 0.5);
+  border-bottom: 1px solid rgba(232, 227, 211, 0.08);
   flex-shrink: 0;
 }
 
@@ -137,7 +141,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .sidebar-add-wrapper {
@@ -189,7 +193,7 @@
   border-radius: 6px;
   color: var(--color-text-primary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -242,7 +246,7 @@
   color: var(--color-text-tertiary);
   font-size: 12px;
   margin: 0 0 14px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .sidebar-empty button {
@@ -255,7 +259,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -274,14 +278,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   margin: 1px 0;
   cursor: pointer;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   transition: all 0.1s ease;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .file-tree-row:hover {
@@ -290,12 +294,12 @@
 }
 
 .file-tree-row.selected {
-  background: rgba(232, 227, 211, 0.08);
+  background: rgba(232, 227, 211, 0.06);
   color: var(--color-text-primary);
 }
 
 .file-tree-row.selected:hover {
-  background: rgba(232, 227, 211, 0.1);
+  background: rgba(232, 227, 211, 0.08);
 }
 
 .file-tree-row.dragging {
@@ -303,19 +307,23 @@
 }
 
 .file-tree-row.drag-over {
-  background: rgba(184, 149, 110, 0.12);
-  outline: 1px dashed rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.12);
+  outline: 1px dashed rgba(217, 119, 87, 0.4);
   outline-offset: -1px;
 }
 
-.file-tree-row.delete-pending {
-  background: rgba(232, 227, 211, 0.06);
-  border-radius: 6px 6px 0 0;
+.file-tree-row-enter {
+  animation: fileRowEnter 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes fileRowEnter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .file-tree-row svg {
   flex-shrink: 0;
-  opacity: 0.45;
+  opacity: 0.4;
   color: var(--color-text-tertiary);
 }
 
@@ -351,11 +359,11 @@
 .file-name-input {
   flex: 1;
   background: rgba(232, 227, 211, 0.08);
-  border: 1px solid rgba(184, 149, 110, 0.5);
+  border: 1px solid rgba(217, 119, 87, 0.5);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   color: var(--color-text-primary);
   outline: none;
   min-width: 0;
@@ -393,7 +401,7 @@
   border-radius: 6px;
   color: var(--color-text-primary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -463,60 +471,57 @@
   transition: transform 0.2s ease;
 }
 
-/* Delete confirmation dropdown */
-.delete-confirm {
+/* Context menu */
+.sidebar-context-menu {
+  position: fixed;
+  background: var(--color-base-lighter);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 140px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  backdrop-filter: blur(20px);
+}
+
+.sidebar-context-menu button {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  margin: 0 0 2px 0;
-  background: rgba(232, 227, 211, 0.06);
-  border-top: 1px solid rgba(232, 227, 211, 0.06);
-  border-radius: 0 0 6px 6px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
-}
-
-.delete-confirm span {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.delete-confirm-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.delete-confirm-cancel,
-.delete-confirm-delete {
-  padding: 3px 5px;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 10px;
   background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: left;
 }
 
-.delete-confirm-cancel {
+.sidebar-context-menu button:hover {
+  background: rgba(232, 227, 211, 0.06);
+}
+
+.sidebar-context-menu button svg {
+  opacity: 0.6;
   color: var(--color-text-tertiary);
 }
 
-.delete-confirm-cancel:hover {
-  background: rgba(232, 227, 211, 0.1);
-  color: var(--color-text-primary);
-}
-
-.delete-confirm-delete {
+.sidebar-context-menu button.destructive {
   color: #a06058;
 }
 
-.delete-confirm-delete:hover {
-  background: rgba(160, 96, 88, 0.2);
+.sidebar-context-menu button.destructive:hover {
+  background: rgba(160, 96, 88, 0.15);
+  color: #c08078;
+}
+
+.sidebar-context-menu button.destructive svg {
+  color: #a06058;
+  opacity: 0.8;
 }
 
 /* ==========================================================================
@@ -541,7 +546,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 /* Integration items wrapper */
@@ -592,7 +597,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 13px; /* Match file tree */
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -635,7 +640,7 @@
   margin-left: auto;
   font-size: 11px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   opacity: 0.8;
 }
 
@@ -679,7 +684,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -791,7 +796,7 @@
   border-radius: 6px;
   color: var(--color-text-tertiary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: left;
@@ -841,7 +846,7 @@
 
 .integration-detail {
   color: var(--color-text-secondary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 
@@ -1130,7 +1135,7 @@
   border-radius: 8px;
   color: var(--color-text-primary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.15s ease;
@@ -1164,7 +1169,7 @@
   color: var(--color-base);
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   margin-top: 4px;
@@ -1205,7 +1210,7 @@
   border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -1296,7 +1301,7 @@
 
 .git-status-text {
   font-size: 11px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-tertiary);
   max-width: 120px;
   overflow: hidden;
@@ -1357,7 +1362,7 @@
   border-radius: 6px;
   font-size: 11px;
   color: #a06058;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .git-action-btn {
@@ -1371,7 +1376,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: left;
@@ -1405,7 +1410,7 @@
   margin-left: auto;
   font-size: 11px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 .git-dropdown-divider {
@@ -1444,7 +1449,7 @@
 .git-setup-done span {
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 /* Zotero Section - unified with Git section */
@@ -1489,7 +1494,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -1522,7 +1527,7 @@
 
 .zotero-status-text {
   font-size: 11px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-tertiary);
 }
 
@@ -1570,7 +1575,7 @@
 .zotero-setting-value {
   font-size: 11px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 .zotero-key-link {
@@ -1602,7 +1607,7 @@
 .zotero-setup-done span {
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 /* Zotero-specific styles (shared with integration) */
@@ -1671,7 +1676,7 @@
   background: rgba(232, 227, 211, 0.08);
   padding: 2px 4px;
   border-radius: 3px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   font-size: 10px;
 }
 
@@ -1691,7 +1696,7 @@
   border-radius: 8px;
   color: var(--color-text-primary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.15s ease;
@@ -1723,7 +1728,7 @@
   border-radius: 6px;
   font-size: 11px;
   color: #a06058;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .zotero-connect-btn {
@@ -1734,7 +1739,7 @@
   color: var(--color-base);
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   margin-top: 4px;
@@ -1782,4 +1787,113 @@
   .project-sidebar-overlay.visible {
     display: block;
   }
+}
+
+/* ==========================================================================
+   SIDEBAR FOOTER - Compact sync & settings
+   ========================================================================== */
+
+.sidebar-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding: 8px 6px 6px 6px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.share-btn:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.share-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--color-accent);
+  color: var(--color-base);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+.sidebar-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sync-btn-compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sync-btn-compact:hover:not(:disabled) {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.sync-btn-compact:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sync-btn-compact .spinning {
+  animation: spin 1s linear infinite;
+}
+
+.integrations-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+}
+
+.integrations-link:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

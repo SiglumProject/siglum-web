@@ -2,18 +2,30 @@
  * GitService - Re-exports from @siglum/git package
  *
  * This module configures and exports the git service instance,
- * wiring it up to the app's ProjectStore for file tree updates.
+ * and switches the file tree root when git connects/disconnects.
  */
 
 import { getGitService } from '@siglum/git'
-import ProjectStore from './ProjectStore'
+import { fileSystemWatcher } from './FileSystemWatcher'
+import { fileManager } from './FileManager'
+
+// Git files are mounted at /git with their own OPFS namespace
+const GIT_ROOT = '/git'
 
 // Create and export the configured git service instance
 const gitService = getGitService({
   corsProxy: 'https://cors.isomorphic-git.org',
   storageKey: 'siglum-git-config',
-  onFileTreeChange: (files) => {
-    ProjectStore.setFiles(files)
+  beforeBranchSwitch: () => fileManager.saveQueue.flushOrThrow(),
+  beforeWorkingTreeChange: () => fileManager.saveQueue.flushOrThrow(),
+})
+
+// Switch file tree root when git connects/disconnects
+gitService.subscribeStatus(async (status) => {
+  if (status.isConnected) {
+    await fileSystemWatcher.setScanRoot(GIT_ROOT)
+  } else {
+    await fileSystemWatcher.resetScanRoot()
   }
 })
 

@@ -1,37 +1,55 @@
-/* Documentation Modal - Warm Brutalist Design */
+/* Help uses a reading font and higher contrast independently of editor typography. */
+.documentation-modal {
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --color-text-secondary: #bdb7b0;
+  --color-text-tertiary: #aaa39b;
+  --color-text-muted: #aaa39b;
+  font-family: var(--font-body);
+  display: flex;
+  flex-direction: column;
+}
+.documentation-modal .base-modal-header { flex-shrink: 0; }
+.documentation-modal .base-modal-header h2 { font-size: 22px; }
+.documentation-modal :is(button, a, summary, input):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 3px;
+}
+.documentation-modal .base-modal-close-button { width: 36px; height: 36px; }
+
 
 .documentation-modal-overlay {
   align-items: center !important;
-  padding: 8vh 20px !important;
+  padding: 32px 20px !important;
 }
 
 .documentation-modal .base-modal-content {
   padding: 0;
   overflow: hidden;
   max-height: none;
+  min-height: 0;
+  flex: 1;
 }
 
-.documentation-modal .base-modal {
-  background: var(--color-base-lighter);
+.base-modal.documentation-modal {
+  background: var(--color-bg);
   border-radius: 12px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
   border: 1px solid var(--color-border);
-  max-height: calc(100vh - 16vh);
-  width: 680px;
+  max-height: calc(100dvh - 64px);
+  width: 820px;
   max-width: 90vw;
 }
 
 .doc-modal-container {
   display: flex;
-  height: calc(100vh - 16vh);
-  max-height: 600px;
-  min-height: 400px;
+  height: min(640px, calc(100dvh - 140px));
+  min-height: 0;
 }
 
 /* Sidebar */
 .doc-sidebar {
-  width: 180px;
-  background: var(--color-base-darker);
+  width: 190px;
+  background: var(--color-bg);
   border-right: 1px solid var(--color-border);
   flex-shrink: 0;
 }
@@ -57,7 +75,7 @@
   transition: all 0.15s ease;
   text-align: left;
   border-radius: 6px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .doc-nav-item:hover {
@@ -89,13 +107,16 @@
 /* Main content */
 .doc-main {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-wrap: anywhere;
   padding: 24px;
   overflow-y: auto;
   background: transparent;
 }
 
 .doc-main::-webkit-scrollbar {
-  width: 6px;
+  width: 8px;
 }
 
 .doc-main::-webkit-scrollbar-track {
@@ -103,29 +124,30 @@
 }
 
 .doc-main::-webkit-scrollbar-thumb {
-  background: var(--color-border);
-  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  border-radius: 4px;
 }
 
 .doc-main::-webkit-scrollbar-thumb:hover {
-  background: rgba(232, 227, 211, 0.2);
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
 
 /* Content Typography */
 .doc-content h2 {
-  font-size: 18px;
+  font-family: var(--font-body);
   font-weight: 600;
+  font-style: normal;
+  font-size: 22px;
   margin: 0 0 6px 0;
   color: var(--color-text-primary);
   letter-spacing: -0.01em;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
 }
 
 .doc-lead {
-  font-size: 13px;
-  color: var(--color-text-secondary);
-  margin: 0 0 24px 0;
-  line-height: 1.5;
+  font-size: 14px;
+  color: var(--color-text-tertiary);
+  margin: 0 0 20px 0;
+  line-height: 1.65;
 }
 
 .doc-section {
@@ -142,7 +164,7 @@
 
 .doc-section p {
   font-size: 13px;
-  line-height: 1.55;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   margin: 0 0 10px 0;
 }
@@ -176,8 +198,8 @@
 }
 
 .feature-item p {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   margin: 0;
 }
@@ -197,8 +219,8 @@
 }
 
 .philosophy-section p {
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   margin: 0 0 10px 0;
 }
@@ -209,11 +231,11 @@
 
 /* Shortcuts - Clean grid */
 .shortcuts-group {
-  margin-bottom: 20px;
+  margin-bottom: 24px;
 }
 
 .shortcuts-group h3 {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   margin: 0 0 10px 0;
   color: var(--color-text-tertiary);
@@ -224,44 +246,57 @@
 .shortcut-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
 }
 
 .shortcut-item {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  transition: background 0.1s ease;
+}
+
+.shortcut-item:hover {
+  background: rgba(232, 227, 211, 0.03);
 }
 
 .shortcut-keys {
   display: flex;
   gap: 3px;
+  min-width: 72px;
+  flex-shrink: 0;
 }
 
 .shortcut-keys kbd {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 5px;
-  background: rgba(232, 227, 211, 0.06);
+  padding: 3px 6px;
+  background: rgba(232, 227, 211, 0.08);
+  border: 1px solid rgba(232, 227, 211, 0.06);
   border-radius: 4px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
-  font-size: 11px;
+  font-family: var(--font-body);
+  font-size: 13px;
   font-weight: 500;
-  color: var(--color-text-secondary);
-  min-width: 20px;
-  height: 20px;
+  color: var(--color-text-primary);
+  min-width: 22px;
+  height: 22px;
 }
 
 .shortcut-item span {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--color-text-secondary);
 }
 
 .doc-note {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--color-text-tertiary);
   margin-top: 16px;
+  padding: 8px 10px;
+  background: rgba(232, 227, 211, 0.02);
+  border-radius: 6px;
 }
 
 /* Mobile gesture list */
@@ -302,7 +337,7 @@
 }
 
 .gesture-text span {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--color-text-secondary);
 }
 
@@ -317,7 +352,7 @@
   left: 12px;
   top: 50%;
   transform: translateY(-50%);
-  color: rgba(232, 227, 211, 0.3);
+  color: var(--color-text-secondary);
 }
 
 .latex-search-input {
@@ -328,13 +363,13 @@
   padding: 10px 14px 10px 38px;
   font-size: 13px;
   color: #E8E3D3;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   outline: none;
   transition: all 0.15s ease;
 }
 
 .latex-search-input::placeholder {
-  color: rgba(232, 227, 211, 0.3);
+  color: var(--color-text-secondary);
 }
 
 .latex-search-input:focus {
@@ -349,20 +384,20 @@
   transform: translateY(-50%);
   background: none;
   border: none;
-  color: rgba(232, 227, 211, 0.3);
+  color: var(--color-text-secondary);
   cursor: pointer;
   padding: 4px;
   border-radius: 4px;
 }
 
 .search-clear:hover {
-  color: rgba(232, 227, 211, 0.6);
+  color: var(--color-text-secondary);
 }
 
 .search-no-results {
   text-align: center;
   padding: 32px;
-  color: rgba(232, 227, 211, 0.4);
+  color: var(--color-text-secondary);
 }
 
 .search-no-results p {
@@ -378,10 +413,10 @@
 }
 
 .feature-category h3 {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   margin: 0 0 12px 0;
-  color: rgba(232, 227, 211, 0.4);
+  color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.06em;
 }
@@ -413,8 +448,8 @@
 }
 
 .shortcut-text {
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
   color: rgba(232, 227, 211, 0.8);
   background: rgba(232, 227, 211, 0.08);
   padding: 3px 6px;
@@ -422,19 +457,19 @@
 }
 
 .arrow {
-  color: rgba(232, 227, 211, 0.25);
-  font-size: 11px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 .result-text {
-  font-size: 12px;
-  color: rgba(232, 227, 211, 0.6);
+  font-size: 14px;
+  color: var(--color-text-secondary);
 }
 
 .feature-detail {
-  font-size: 12px;
-  line-height: 1.5;
-  color: rgba(232, 227, 211, 0.4);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
@@ -473,9 +508,9 @@
   height: 20px;
   background: rgba(232, 227, 211, 0.1);
   border-radius: 50%;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
-  color: rgba(232, 227, 211, 0.6);
+  color: var(--color-text-secondary);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -492,15 +527,15 @@
 }
 
 .step-content p {
-  font-size: 12px;
-  line-height: 1.5;
-  color: rgba(232, 227, 211, 0.5);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
 .step-content code {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   background: rgba(232, 227, 211, 0.08);
   padding: 2px 5px;
   border-radius: 3px;
@@ -529,15 +564,15 @@
 
 .sample-input pre {
   margin: 0;
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   line-height: 1.6;
   color: rgba(232, 227, 211, 0.75);
 }
 
 .example-note {
-  font-size: 12px;
-  color: rgba(232, 227, 211, 0.4);
+  font-size: 14px;
+  color: var(--color-text-secondary);
   margin: 10px 0 0 0;
 }
 
@@ -573,19 +608,19 @@
 }
 
 .tip-card p {
-  font-size: 12px;
-  line-height: 1.5;
-  color: rgba(232, 227, 211, 0.5);
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
 .tip-card kbd {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   background: rgba(232, 227, 211, 0.08);
   padding: 2px 4px;
   border-radius: 3px;
-  color: rgba(232, 227, 211, 0.6);
+  color: var(--color-text-secondary);
 }
 
 /* Raw LaTeX Note */
@@ -603,51 +638,90 @@
 }
 
 .raw-latex-note p {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
-  color: rgba(232, 227, 211, 0.45);
+  color: var(--color-text-secondary);
   margin: 0;
 }
 
 .raw-latex-note code {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 11px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   background: rgba(232, 227, 211, 0.08);
   padding: 2px 5px;
   border-radius: 3px;
   color: rgba(232, 227, 211, 0.65);
 }
 
-/* FAQ */
-.faq-list {
+/* FAQ — accordion style matching landing page */
+.doc-content .faq-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 0;
 }
 
-.faq-item {
-  padding: 14px 16px;
-  background: rgba(232, 227, 211, 0.02);
-  border: 1px solid var(--color-border-subtle);
-  border-radius: 6px;
+.doc-content .faq-item {
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-top: 1px solid var(--color-border-subtle);
+  border-radius: 0;
 }
 
-.faq-item h3 {
-  font-size: 13px;
-  font-weight: 600;
-  margin: 0 0 6px 0;
+.doc-content .faq-item:first-child {
+  border-top: none;
+}
+
+.doc-content .faq-item summary {
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-style: normal;
   color: var(--color-text-primary);
+  line-height: 1.45;
+  padding: 12px 0;
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: color 0.2s ease;
 }
 
-.faq-item p {
-  font-size: 12px;
-  line-height: 1.55;
+.doc-content .faq-item summary::-webkit-details-marker {
+  display: none;
+}
+
+.doc-content .faq-item summary::after {
+  content: '+';
+  font-family: var(--font-body);
+  font-style: normal;
+  font-size: 13px;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.doc-content .faq-item[open] summary::after {
+  content: '\2212';
+  color: var(--color-accent);
+}
+
+.doc-content .faq-item summary:hover {
+  color: var(--color-accent);
+}
+
+.doc-content .faq-item p {
+  font-size: 14px;
+  line-height: 1.6;
   color: var(--color-text-secondary);
   margin: 0;
+  padding: 0 0 12px;
 }
 
-.faq-item p + p {
-  margin-top: 8px;
+.doc-content .faq-item p + p {
+  margin-top: 0;
+  padding-top: 6px;
 }
 
 /* Text links - inherit color with underline */
@@ -664,23 +738,29 @@
 
 /* Help Section */
 .help-section {
+  padding-bottom: 20px;
   margin-bottom: 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .help-section:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .help-section h3 {
-  font-size: 13px;
+  font-family: var(--font-body);
+  font-style: normal;
+  font-size: 14px;
   font-weight: 600;
   margin: 0 0 6px 0;
   color: var(--color-text-primary);
 }
 
 .help-section p {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   margin: 0 0 10px 0;
 }
@@ -688,20 +768,21 @@
 .help-link {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 6px 10px;
+  gap: 8px;
+  padding: 8px 14px;
   background: rgba(232, 227, 211, 0.04);
   border: 1px solid var(--color-border);
-  border-radius: 6px;
+  border-radius: 8px;
   text-decoration: none;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   transition: all 0.15s ease;
 }
 
 .help-link:hover {
   background: rgba(232, 227, 211, 0.08);
+  border-color: rgba(232, 227, 211, 0.15);
   color: var(--color-text-primary);
 }
 
@@ -717,8 +798,8 @@
 
 .help-list li {
   position: relative;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   padding-left: 12px;
   margin-bottom: 4px;
@@ -736,7 +817,7 @@
   .doc-modal-container {
     flex-direction: column;
     max-height: none;
-    height: auto;
+    height: min(680px, calc(100dvh - 116px));
   }
 
   .doc-sidebar {
@@ -746,16 +827,18 @@
   }
 
   .doc-nav {
-    flex-direction: row;
-    overflow-x: auto;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow-x: visible;
     padding: 8px 12px;
     gap: 4px;
   }
 
   .doc-nav-item {
+    width: auto;
     flex-shrink: 0;
     padding: 6px 12px;
-    font-size: 12px;
+    font-size: 14px;
   }
 
   .doc-nav-icon {
@@ -764,7 +847,7 @@
 
   .doc-main {
     padding: 24px;
-    max-height: 60vh;
+    max-height: none;
   }
 
   .feature-demo {
@@ -820,8 +903,8 @@
 }
 
 .template-content p {
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-secondary);
   margin: 0;
 }
@@ -916,10 +999,41 @@
   flex-shrink: 0;
 }
 
+.integrations-suggest-link {
+  display: block;
+  margin-top: auto;
+  padding: 10px 10px 6px;
+  font-size: 13px;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+
+.integrations-suggest-link:hover {
+  color: var(--color-text-secondary);
+}
+
 .integrations-content {
   flex: 1;
   padding: 24px;
   overflow-y: auto;
+}
+
+.integrations-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.integrations-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.integrations-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  border-radius: 4px;
+}
+
+.integrations-content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
 
 .integration-header {
@@ -935,8 +1049,10 @@
 }
 
 .integration-header h2 {
-  font-size: 18px;
+  font-family: var(--font-body);
   font-weight: 600;
+  font-style: normal;
+  font-size: 22px;
   margin: 0;
   color: var(--color-text-primary);
 }
@@ -956,7 +1072,7 @@
   gap: 6px;
   padding: 6px 12px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   margin-bottom: 20px;
 }
@@ -985,7 +1101,7 @@
 }
 
 .integration-field label {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--color-text-secondary);
   letter-spacing: 0.01em;
@@ -998,7 +1114,7 @@
   border-radius: 8px;
   color: var(--color-text-primary);
   font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   outline: none;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1009,13 +1125,13 @@
 
 .integration-field input:focus {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 3px rgba(184, 149, 110, 0.15);
+  box-shadow: 0 0 0 3px rgba(217, 119, 87, 0.15);
 }
 
 .integration-field-value {
   font-size: 14px;
   color: var(--color-text-primary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   padding: 10px 0;
   border-bottom: 1px solid var(--color-border-subtle);
 }
@@ -1028,7 +1144,7 @@
   width: 100%;
   padding: 4px 8px;
   font-size: 14px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   color: var(--color-text-primary);
   background: rgba(232, 227, 211, 0.06);
   border: 1px solid var(--color-border-subtle);
@@ -1047,7 +1163,7 @@
 }
 
 .integration-field-help {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--color-accent);
   text-decoration: none;
   transition: opacity 0.15s ease;
@@ -1058,7 +1174,7 @@
 }
 
 .integration-field-hint {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--color-text-tertiary);
 }
 
@@ -1087,7 +1203,7 @@
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   border: none;
@@ -1135,15 +1251,17 @@
 }
 
 .integration-feature-section h4 {
-  font-size: 13px;
+  font-family: var(--font-body);
+  font-style: normal;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-text-secondary);
   margin: 0 0 8px 0;
 }
 
 .integration-feature-section p {
-  font-size: 12px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.65;
   color: var(--color-text-tertiary);
   margin: 0;
 }
@@ -1153,14 +1271,20 @@
    ========================================================================== */
 
 .collab-section {
-  margin-bottom: 28px;
+  padding-bottom: 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--color-border-subtle);
 }
 
 .collab-section:last-child {
   margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
 }
 
 .collab-section h3 {
+  font-family: var(--font-body);
+  font-style: normal;
   font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
@@ -1168,7 +1292,7 @@
 }
 
 .collab-section p {
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   color: var(--color-text-secondary);
   margin: 0 0 12px 0;
@@ -1178,7 +1302,7 @@
   margin: 0;
   padding-left: 20px;
   color: var(--color-text-secondary);
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.7;
 }
 
@@ -1200,7 +1324,7 @@
   position: relative;
   padding-left: 16px;
   margin-bottom: 12px;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.6;
   color: var(--color-text-secondary);
 }
@@ -1221,8 +1345,8 @@
 }
 
 .collab-tips code {
-  font-family: 'SF Mono', Monaco, monospace;
-  font-size: 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
   background: rgba(232, 227, 211, 0.08);
   padding: 2px 5px;
   border-radius: 3px;
@@ -1243,7 +1367,7 @@
 }
 
 .collab-column h4 {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-text-primary);
   margin: 0 0 10px 0;
@@ -1256,7 +1380,7 @@
 }
 
 .collab-column ul li {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.6;
   color: var(--color-text-secondary);
   padding-left: 14px;
@@ -1276,7 +1400,21 @@
 }
 
 .collab-note {
-  font-size: 12px !important;
+  font-size: 14px !important;
   color: var(--color-text-tertiary) !important;
-  font-style: italic;
+  font-style: normal;
+}
+
+/* Keep both levels of help navigation reachable on phones. */
+@media (max-width: 700px) {
+  .documentation-modal-overlay { padding: 16px 12px !important; }
+  .base-modal.documentation-modal { max-width: 100%; max-height: calc(100dvh - 32px); }
+  .doc-sidebar { flex-shrink: 0; }
+  .doc-nav-item { min-height: 44px; width: 100%; }
+  .doc-content.integrations-split { flex-direction: column; }
+  .integrations-nav { width: 100%; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .integrations-nav-btn { width: auto; }
+  .integrations-suggest-link { margin-top: 0; }
+  .integrations-content { min-height: 0; min-width: 0; padding: 20px 24px; }
+  .collab-comparison { grid-template-columns: 1fr; }
 }

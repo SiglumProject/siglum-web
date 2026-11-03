@@ -1,17 +1,35 @@
 .pdf-viewer {
   width: 100%;
   height: 100%;
-  background: var(--color-base);
+  background: rgba(16, 14, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(232, 227, 211, 0.03);
   position: relative;
   overflow: hidden;
   transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   outline: none;
+  /* Prevent horizontal overscroll from triggering browser back/forward navigation */
+  overscroll-behavior-x: contain;
+}
+
+.pdf-viewer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  pointer-events: none;
 }
 
 .pdf-document {
   width: 100%;
   height: calc(100% - 32px);
   margin-top: 32px;
+  padding: 16px 12px 24px 12px;
   /* Apple-style: no scroll, all positioning via transform */
   overflow: hidden;
   box-sizing: border-box;
@@ -23,6 +41,8 @@
   /* Prevent text selection during gestures */
   user-select: none;
   -webkit-user-select: none;
+  /* Prevent horizontal overscroll from triggering browser back/forward navigation */
+  overscroll-behavior: contain;
 }
 
 @media (min-width: 1200px) {
@@ -40,11 +60,26 @@
     0 12px 40px rgba(0, 0, 0, 0.4),
     0 6px 16px rgba(0, 0, 0, 0.25);
   line-height: 0;
-  background: #2a2520;
+  background: rgba(30, 27, 22, 0.9);
+  border-radius: 3px;
+  overflow: hidden;
+  /* Visible edge when zoomed in — thin border around document */
+  border: 1px solid rgba(232, 227, 211, 0.04);
   /* Transform origin at top-left for predictable math */
   transform-origin: 0 0;
   /* Enable GPU acceleration */
   will-change: transform;
+  /* Fade in on first render */
+  animation: pdfFadeIn 0.2s ease-out;
+}
+
+@keyframes pdfFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .pdf-viewer.pdf-dark-mode .pdf-page-wrapper {
@@ -58,29 +93,7 @@
 }
 
 .pdf-page-filter.dark {
-  animation: toDark 0.5s ease forwards;
-}
-
-.pdf-page-filter.light {
-  animation: toLight 0.5s ease forwards;
-}
-
-@keyframes toDark {
-  from {
-    filter: sepia(0.12) brightness(0.93);
-  }
-  to {
-    filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
-  }
-}
-
-@keyframes toLight {
-  from {
-    filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
-  }
-  to {
-    filter: sepia(0.12) brightness(0.93);
-  }
+  filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
 }
 
 .pdf-page-canvas {
@@ -108,20 +121,20 @@
 }
 
 .pdf-text-layer span::selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-text-layer span::-moz-selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 /* Dark mode text selection */
 .pdf-viewer.pdf-dark-mode .pdf-text-layer ::selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-viewer.pdf-dark-mode .pdf-text-layer ::-moz-selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-loading,
@@ -136,7 +149,7 @@
   color: var(--color-text-tertiary);
   font-size: 15px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.01em;
 }
 
@@ -150,7 +163,7 @@
   border-radius: 8px;
   cursor: pointer;
   transition: background 0.15s ease, transform 0.15s ease;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .pdf-compile-button:hover:not(:disabled) {
@@ -176,7 +189,7 @@
   font-size: 11px;
   font-weight: 500;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   user-select: none;
   padding: 0 6px;
   white-space: nowrap;
@@ -187,7 +200,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   user-select: none;
   cursor: pointer;
   padding: 2px 6px;
@@ -209,8 +222,6 @@
   left: 50%;
   transform: translateX(-50%);
   background: var(--color-base-lighter);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 6px;
@@ -240,7 +251,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   text-align: left;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease;
@@ -272,8 +283,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--color-base-darker);
-  border-bottom: 1px solid var(--color-border);
+  background: rgba(20, 17, 14, 0.5);
+  border-bottom: 1px solid rgba(232, 227, 211, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.3);
   padding: 0 12px;
   z-index: 10;
 }
@@ -323,7 +335,7 @@
   border-radius: 4px;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, transform 0.1s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
   padding: 0;
   touch-action: manipulation;
 }
@@ -336,6 +348,7 @@
 .control-button:hover:not(:disabled) {
   background: rgba(232, 227, 211, 0.1);
   color: var(--color-text-primary);
+  transform: translateY(-0.5px);
 }
 
 .control-button:disabled {
@@ -363,7 +376,7 @@
   border-radius: 4px;
   padding: 4px 8px;
   font-size: 16px; /* Prevents iOS zoom on focus */
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   color: var(--color-text-primary);
   width: 160px;
   height: 24px;
@@ -374,7 +387,7 @@
 
 .search-input:focus-visible {
   border-color: var(--color-accent);
-  box-shadow: 0 0 0 2px rgba(181, 133, 106, 0.2);
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.2);
 }
 
 .search-input:focus {
@@ -394,7 +407,7 @@
 .search-count {
   font-size: 10px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   padding: 0 6px;
   white-space: nowrap;
 }
@@ -435,7 +448,7 @@
   top: 32px;
   right: 12px;
   height: 32px;
-  background: var(--color-base-darker);
+  background: rgba(26, 22, 20, 0.85);
   border: 1px solid var(--color-border);
   border-top: none;
   border-radius: 0 0 6px 6px;
@@ -507,8 +520,6 @@
   width: 240px;
   max-height: calc(100% - 60px);
   background: rgba(34, 31, 26, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
@@ -679,42 +690,24 @@
   }
 }
 
-/* SyncTeX line indicator - points to the line in the PDF */
+/* SyncTeX highlight band — full-width amber bar that fades out */
 .pdf-sync-indicator {
   position: absolute;
   left: 0;
   right: 0;
-  height: 3px;
-  background: orange;
+  height: 16px;
+  margin-top: -8px; /* Center on the Y coordinate */
+  background: rgba(212, 166, 86, 0.35);
   pointer-events: none;
   z-index: 1000;
-  box-shadow: 0 0 10px orange, 0 0 20px orange;
+  border-left: 3px solid rgba(212, 166, 86, 0.8);
+  animation: syncHighlightFade 2s ease-out forwards;
 }
 
-.pdf-sync-indicator::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 0;
-  height: 0;
-  border-top: 10px solid transparent;
-  border-bottom: 10px solid transparent;
-  border-left: 16px solid orange;
+@keyframes syncHighlightFade {
+  0% { opacity: 1; }
+  60% { opacity: 1; }
+  100% { opacity: 0; }
 }
 
-@keyframes syncHighlightPulse {
-  0% {
-    opacity: 1;
-    box-shadow: 0 0 16px var(--color-accent);
-  }
-  50% {
-    opacity: 1;
-    box-shadow: 0 0 8px var(--color-accent);
-  }
-  100% {
-    opacity: 0.5;
-    box-shadow: none;
-  }
-}
+.pdf-retry-button { min-height: 44px; padding: 0 16px; background: #d1ad84; color: #241d14; border: 0; border-radius: 10px; font: inherit; cursor: pointer; }

@@ -5,7 +5,7 @@ export interface UndoState {
 }
 
 /**
- * Document metadata stored in IndexedDB
+ * Document metadata
  * Content is stored separately in the filesystem
  */
 export interface DocumentMetadata {
@@ -69,12 +69,19 @@ export function toDocumentMetadata(doc: SiglumDocument, filePath: string): Docum
   }
 }
 
+export interface MatchPosition {
+  line: number        // 1-indexed line number
+  column: number      // 0-indexed column in line
+  context: string     // Line content with <mark> tags around match
+}
+
 export interface SearchResult {
   document: SiglumDocument
   relevanceScore: number
   matchedTerms: string[]
   snippet: string         // Context around the match
   highlights: string[]    // HTML highlighted matches
+  matches: MatchPosition[] // All match positions in content
 }
 
 export interface DocumentMetrics {

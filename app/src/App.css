@@ -4,24 +4,104 @@
   height: 100vh;
   display: flex;
   flex-direction: column;
-  background: var(--color-base);
+  background: linear-gradient(135deg, #1a1614 0%, #221f1a 50%, #1a1614 100%);
   color: var(--color-text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
+}
+
+.app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 160% 120% at 50% 30%, rgba(217, 119, 87, 0.07) 0%, rgba(217, 119, 87, 0.02) 40%, transparent 100%),
+    radial-gradient(ellipse 140% 100% at 20% 80%, rgba(217, 119, 87, 0.04) 0%, transparent 100%),
+    radial-gradient(ellipse 140% 100% at 80% 20%, rgba(232, 155, 126, 0.025) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 0;
+}
+
+.app::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.03;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px;
 }
 
 /* Override react-resizable-panels default styling */
 [data-panel] {
-  background: var(--color-base);
+  background: transparent;
 }
 
 [data-panel-group] {
-  background: var(--color-base);
+  background: transparent;
 }
 
 .main-content {
   flex: 1;
   position: relative;
   overflow: hidden;
+}
+
+/* Loading and error fullscreen states */
+.app-fullscreen-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  color: var(--color-text-primary);
+  font-size: 17px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.app-loading-content {
+  text-align: center;
+  opacity: 0;
+  transform: translateY(12px);
+  animation: fadeInUp 0.6s cubic-bezier(0.23, 1, 0.32, 1) forwards;
+}
+
+.app-loading-spinner {
+  margin-bottom: 20px;
+  font-size: 28px;
+  opacity: 0.4;
+  animation: spin 2s linear infinite;
+}
+
+.app-error-content {
+  text-align: center;
+}
+
+.app-error-icon {
+  margin-bottom: 16px;
+  font-size: 32px;
+  color: var(--color-error, #ff6b6b);
+}
+
+.app-error-message {
+  color: var(--color-error, #ff6b6b);
+}
+
+.app-error-reload {
+  margin-top: 20px;
+  padding: 8px 16px;
+  background: var(--color-base-lighter, #2a2a2a);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.app-error-reload:hover {
+  background: var(--color-base-hover, #333);
 }
 
 /* Desktop/Mobile Views */
@@ -54,7 +134,7 @@
 /* PDF Preview Panel - delayed fade-in */
 .pdf-preview-panel {
   height: 100%;
-  background: var(--color-base);
+  background: transparent;
   opacity: 0;
   transform: translateY(8px);
   transition: opacity 0.25s cubic-bezier(0.23, 1, 0.32, 1), transform 0.25s cubic-bezier(0.23, 1, 0.32, 1);
@@ -96,19 +176,95 @@
   width: 100%;
 }
 
-.editor-with-sidebar .latex-editor-container {
+.editor-with-tabs {
+  display: flex;
+  flex-direction: column;
   flex: 1;
   min-width: 0;
+  height: 100%;
+  background: rgba(16, 14, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.editor-with-tabs .latex-editor-container,
+.editor-with-tabs .image-preview-pane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 /* Resize Handle - warm terracotta divider */
 .resize-handle {
-  width: 2px !important;
-  background: var(--color-border);
+  width: 1px !important;
+  background: rgba(232, 227, 211, 0.08);
   transition: background 0.3s cubic-bezier(0.23, 1, 0.32, 1), width 0.15s ease;
   position: relative;
   border-radius: 1px;
-  overflow: hidden;
+  overflow: visible;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Sync link button at top of resize handle (in toolbar area) */
+.sync-link-button {
+  position: absolute;
+  top: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--color-base-darker);
+  border: 1px solid var(--color-border);
+  color: var(--color-text-tertiary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer !important;
+  z-index: 100;
+  transition: all 0.15s ease;
+  padding: 0;
+  pointer-events: auto;
+}
+
+/* Larger hit area that blocks resize handle interaction */
+.sync-link-button::before {
+  content: '';
+  position: absolute;
+  top: -8px;
+  left: -8px;
+  right: -8px;
+  bottom: -8px;
+  border-radius: 50%;
+  cursor: pointer !important;
+}
+
+.sync-link-button:hover {
+  background: var(--color-base);
+  border-color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
+  transform: scale(1.1);
+}
+
+/* Prevent resize handle hover effect near the button */
+.resize-handle:has(.sync-link-button:hover) {
+  width: 2px !important;
+  background: var(--color-border);
+}
+
+.resize-handle:has(.sync-link-button:hover)::before {
+  opacity: 0;
+}
+
+.sync-link-button.active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: var(--color-base);
+}
+
+.sync-link-button.active:hover {
+  background: var(--color-accent-light);
+  border-color: var(--color-accent-light);
 }
 
 .resize-handle::before {
@@ -148,7 +304,7 @@
   padding: 40px 20px;
   max-width: 900px;
   margin: 0 auto;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.6;
   overflow-y: auto;
   height: 100%;
@@ -183,7 +339,7 @@
   font-size: 16px;
   font-weight: 600;
   color: var(--color-text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-display);
 }
 
 .conflict-modal-repo {
@@ -192,7 +348,7 @@
   padding: 4px 8px;
   font-size: 11px;
   color: var(--color-text-secondary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   background: rgba(232, 227, 211, 0.06);
   border-radius: 4px;
   text-decoration: none;
@@ -205,11 +361,48 @@
 }
 
 .conflict-modal-description {
-  margin: 0 0 20px 0;
+  margin: 0 0 16px 0;
   font-size: 13px;
   line-height: 1.6;
   color: var(--color-text-secondary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
+}
+
+.conflict-modal-files {
+  margin: 0 0 16px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.conflict-modal-files li {
+  padding: 8px 12px;
+  background: rgba(160, 96, 88, 0.1);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #c08078;
+  margin-bottom: 6px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.conflict-file-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conflict-file-lines {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.conflict-modal-files li:last-child {
+  margin-bottom: 0;
 }
 
 .conflict-modal-actions {
@@ -223,7 +416,7 @@
   border-radius: 8px;
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: background 0.15s ease, filter 0.15s ease;
   touch-action: manipulation;
@@ -246,4 +439,47 @@
 .conflict-modal-btn.secondary:hover {
   background: rgba(232, 227, 211, 0.12);
   color: var(--color-text-primary);
+}
+
+.conflict-modal-compare-link {
+  display: inline-block;
+  margin: 8px 0 12px 0;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--color-accent);
+  background: rgba(160, 96, 88, 0.1);
+  border-radius: 6px;
+  text-decoration: none;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.conflict-modal-compare-link:hover {
+  background: rgba(160, 96, 88, 0.2);
+  color: var(--color-accent-light);
+}
+
+/* Image preview pane (shown when clicking an image in sidebar) */
+.image-preview-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  background: transparent;
+  overflow: auto;
+}
+
+.image-preview-pane img {
+  max-width: 90%;
+  max-height: 90%;
+  object-fit: contain;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.4),
+    0 6px 16px rgba(0, 0, 0, 0.25);
+}
+
+.image-preview-error {
+  font-size: 13px;
+  color: var(--color-text-tertiary);
 }

@@ -1,65 +1,142 @@
 import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import type { ImperativePanelHandle } from 'react-resizable-panels'
+import { TriangleAlert } from 'lucide-react'
 import CommandPalette from './components/CommandPalette'
 import LaTeXEditor from './components/LaTeXEditor/LaTeXEditor'
 import EmptyState from './components/EmptyState'
+import { useIsMobile } from './hooks/useIsMobile'
 import type { FileItem } from './components/ProjectSidebar'
 import type { CitationItem } from './services/CitationService'
 
 // Lazy load heavy components - only loads when needed
+const MobileStudio = lazy(() => import('./components/MobileStudio/MobileStudio'))
 const PDFViewer = lazy(() => import('./components/PDFViewer'))
 const DocumentationModal = lazy(() => import('./components/DocumentationModal'))
 const ProjectSidebar = lazy(() => import('./components/ProjectSidebar'))
-const Onboarding = lazy(() => import('./components/Onboarding/Onboarding'))
-const ShareModal = lazy(() => import('./components/ShareModal'))
-const ShareViewer = lazy(() => import('./components/ShareViewer'))
-import { useDocument } from './hooks/useDocument'
+
+import { useFileManager } from './hooks/useFileManager'
+import FileReaderService from './services/FileReaderService'
 import { useAutoSave } from './hooks/useAutoSave'
 import { useCompilation } from './hooks/useCompilation'
 import { useModals } from './hooks/useModals'
 import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
-import DocumentManager from './services/DocumentManager'
+import { fileManager } from './services/FileManager'
+import { fileSystemWatcher } from './services/FileSystemWatcher'
 import GitService from './services/GitService'
-import ShareService from './services/ShareService'
+import { ToastContainer } from './components/Toast/Toast'
+import { TabBar } from './components/TabBar/TabBar'
 import EventBus from './services/EventBus'
+import ProjectStore from './services/ProjectStore'
+import StateStore from './services/FileStateStore'
+import { fileSystem } from '@siglum/filesystem'
 import { useEventBus } from './hooks/useEventBus'
 import './App.css'
 
-// Make DocumentManager available globally in development
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'])
+const TEXT_EXTS = new Set([
+  'tex', 'sty', 'cls', 'bib', 'bst', 'dtx', 'ins', 'def', 'cfg', 'fd',
+  'txt', 'md', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'toml',
+  'log', 'aux', 'toc', 'lof', 'lot', 'bbl', 'blg', 'idx', 'ind', 'ilg',
+  'sh', 'py', 'lua', 'js', 'css', 'html', 'htm', 'tikz', 'pgf',
+])
+const MAX_PREVIEW_BYTES = 50 * 1024 * 1024 // 50 MB
+function getExt(p: string) { return (p.split('.').pop() || '').toLowerCase() }
+function isImagePath(p: string) { return IMAGE_EXTS.has(getExt(p)) }
+function isTextPath(p: string) {
+  const ext = getExt(p)
+  return !ext || TEXT_EXTS.has(ext)
+}
+
+// Make fileManager available globally in development
 if (import.meta.env.DEV) {
-  (window as any).DocumentManager = DocumentManager;
+  (window as any).fileManager = fileManager;
+  (window as any).fileSystemWatcher = fileSystemWatcher;
 }
 
 const App: React.FC = () => {
-  const { currentDocument, isLoading, error, updateContent, loadDocument, createNewDocument } = useDocument()
-  const [latexCode, setLatexCode] = useState('')
+  const isMobile = useIsMobile()
+  const { currentFile, fileTree, isLoading, error, openFile, createNewFile, getRecentPaths } = useFileManager()
+  const [editorDraft, setEditorDraft] = useState({ path: '', content: '' })
+  // Keep document identity and source coherent in the first render after a tab switch.
+  const latexCode = editorDraft.path === currentFile?.path ? editorDraft.content : currentFile?.content ?? ''
+  const setLatexCode = useCallback((content: string) => {
+    setEditorDraft({ path: currentFile?.path ?? '', content })
+  }, [currentFile?.path])
   const [showPreview, setShowPreview] = useState(false)
   const [showDesktopPreview, setShowDesktopPreview] = useState(true)
   const [isLoaded, setIsLoaded] = useState(false)
-  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 })
-  const [sidebarExpanded, setSidebarExpanded] = useState(() => {
-    const saved = localStorage.getItem('siglum-sidebar-expanded')
-    return saved === 'true'
-  })
-  const [projectFiles, setProjectFiles] = useState<FileItem[]>(() => {
-    const saved = localStorage.getItem('siglum-project-files')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [selectedFileId, setSelectedFileId] = useState<string | undefined>()
-  const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>()
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem('siglum-onboarding-complete')
-  })
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
+  const [stateLoaded, setStateLoaded] = useState(false)
+
+  // Image preview — tracked separately to avoid text read/autosave corruption
+  const [imageFilePath, setImageFilePath] = useState<string | null>(null)
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!imageFilePath) {
+      setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+      setImageError(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const stats = await fileSystem.stat(imageFilePath)
+        if (cancelled) return
+        if (stats.size > MAX_PREVIEW_BYTES) {
+          setImageError(`File too large to preview (${(stats.size / 1024 / 1024).toFixed(0)} MB)`)
+          setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+          return
+        }
+        const data = await fileSystem.readBinary(imageFilePath, { autoDecompress: false })
+        if (cancelled) return
+        const ext = (imageFilePath.split('.').pop() || 'png').toLowerCase()
+        const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+        const url = URL.createObjectURL(new Blob([data], { type: mime }))
+        setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url })
+        setImageError(null)
+      } catch {
+        if (!cancelled) {
+          setImageBlobUrl(null)
+          setImageError('Failed to load image')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+    }
+  }, [imageFilePath])
+
+  // Convert fileTree to FileItem array for sidebar compatibility
+  const projectFiles = React.useMemo((): FileItem[] => {
+    if (!fileTree?.children) return []
+    const convert = (node: typeof fileTree): FileItem => ({
+      id: node.id,
+      name: node.name,
+      path: node.path,
+      type: node.type === 'directory' ? 'folder' : 'file',
+      children: node.children?.map(convert)
+    })
+    return fileTree.children.map(convert)
+  }, [fileTree])
+
+  // Keep ProjectStore in sync so autocomplete/plugins can access the file list
+  React.useEffect(() => {
+    ProjectStore.setFiles(projectFiles)
+  }, [projectFiles])
+
+  // Current file path from fileManager
+  const selectedFilePath = currentFile?.path
+  // Sidebar highlights image if viewing one, otherwise the open text file
+  const selectedFileId = (imageFilePath || selectedFilePath) ? `fs:${imageFilePath || selectedFilePath}` : undefined
   const [triggerGitConnect, setTriggerGitConnect] = useState(false)
   const [showConflictModal, setShowConflictModal] = useState(false)
-  const [showShareModal, setShowShareModal] = useState(false)
-  const [isClosingShareModal, setIsClosingShareModal] = useState(false)
-  const [viewingShareId, setViewingShareId] = useState<string | null>(() => {
-    // Check URL for share link on initial load
-    const match = window.location.pathname.match(/^\/share\/([a-z0-9]+)$/i)
-    return match ? match[1] : null
-  })
+  const [showWordCount, setShowWordCount] = useState(false)
+  const [showCompileStatus, setShowCompileStatus] = useState(true)
+
   const editorPanelRef = useRef<ImperativePanelHandle>(null)
   const previewPanelRef = useRef<ImperativePanelHandle>(null)
 
@@ -75,7 +152,8 @@ const App: React.FC = () => {
     compileRef,
     autoCompileRef,
     clearPendingAutoCompile,
-  } = useCompilation(latexCode, isLoaded)
+    diagnostics,
+  } = useCompilation(latexCode, isLoaded, currentFile?.path)
 
   // Modal state from hook
   const {
@@ -95,13 +173,13 @@ const App: React.FC = () => {
 
   // Memoized callbacks for keyboard shortcuts
   const handleCloseCurrentDocument = useCallback(async () => {
-    const recentDocs = DocumentManager.getRecentDocuments()
-    if (recentDocs.length > 1) {
-      await loadDocument(recentDocs[1].id)
+    const recentPaths = getRecentPaths()
+    if (recentPaths.length > 1) {
+      await openFile(recentPaths[1])
     } else {
-      await createNewDocument()
+      await createNewFile()
     }
-  }, [loadDocument, createNewDocument])
+  }, [openFile, createNewFile, getRecentPaths])
 
   const handleToggleSidebar = useCallback(() => {
     setSidebarExpanded(prev => !prev)
@@ -119,22 +197,21 @@ const App: React.FC = () => {
     setShowCommandPalette(false)
   }, [])
 
-  const handleOpenCommandPaletteModal = useCallback(() => {
-    setShowCommandPalette(true)
-  }, [])
-
   const handleGitConnectTriggered = useCallback(() => {
     setTriggerGitConnect(false)
   }, [])
 
-  const handleOnboardingComplete = useCallback(() => {
-    setShowOnboarding(false)
+  // Tab bar state
+  const tabsRef = useRef<string[]>([])
+  const handleTabsChanged = useCallback((tabs: string[]) => {
+    tabsRef.current = tabs
   }, [])
-
-  const handleConnectGithub = useCallback(() => {
-    setTriggerGitConnect(true)
-    setSidebarExpanded(true)
-  }, [])
+  const selectTabByIndex = useCallback((index: number) => {
+    const tabs = tabsRef.current
+    if (index < tabs.length) {
+      openFile(tabs[index])
+    }
+  }, [openFile])
 
   // Keyboard shortcuts hook
   useKeyboardShortcuts({
@@ -145,53 +222,91 @@ const App: React.FC = () => {
     onCloseCommandPalette: closeCommandPalette,
     onOpenDocumentation: openDocumentation,
     onCloseDocumentation: closeDocumentation,
-    onCreateNewDocument: createNewDocument,
+    onCreateNewDocument: createNewFile,
     onCloseCurrentDocument: handleCloseCurrentDocument,
     onToggleSidebar: handleToggleSidebar,
-    onSetLatexCode: setLatexCode,
     setShowDesktopPreview,
     setShowPreview,
     editorPanelRef,
     previewPanelRef,
+    onSelectTabByIndex: selectTabByIndex,
   })
 
-  // Sync local state with current document and update browser title
+  // Sync local state with current file and update browser title
   useEffect(() => {
-    if (currentDocument) {
-      setLatexCode(currentDocument.content)
-      // Update browser tab title with document title
-      const titlePrefix = currentDocument.title === `Untitled ${new Date().toLocaleDateString()}` 
-        ? 'Untitled' 
-        : currentDocument.title
+    if (currentFile) {
+      setLatexCode(currentFile.content)
+      // Update browser tab title with file name
+      const fileName = currentFile.path.split('/').pop() || 'Untitled'
+      const titlePrefix = fileName.replace(/\.tex$/, '')
       document.title = `${titlePrefix} - Siglum`
     } else {
-      // Default title when no document
+      // Default title when no file
       document.title = 'Siglum - LaTeX Editor'
     }
-  }, [currentDocument])
+  }, [currentFile])
 
-  // Trigger loading animation after initial render
+  // Update title when viewing an image
   useEffect(() => {
+    if (imageFilePath) {
+      const name = imageFilePath.split('/').pop() || 'Image'
+      document.title = `${name} - Siglum`
+    }
+  }, [imageFilePath])
+
+  // Trigger loading animation when editor becomes visible
+  const hasFile = !!currentFile
+  useEffect(() => {
+    if (!hasFile) {
+      setIsLoaded(false)
+      return
+    }
     const timer = setTimeout(() => {
       setIsLoaded(true)
     }, 100)
     return () => clearTimeout(timer)
+  }, [hasFile])
+
+  // Save sidebar state to StateStore
+  useEffect(() => {
+    if (stateLoaded) {
+      StateStore.setSidebarExpanded(sidebarExpanded)
+    }
+  }, [sidebarExpanded, stateLoaded])
+
+  // Load app state on mount — raw localStorage, zero module dependencies
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('siglum_app_state')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed.sidebarExpanded !== undefined) setSidebarExpanded(parsed.sidebarExpanded)
+        // projectFiles now comes from FileSystemWatcher, no need to load from localStorage
+        if (parsed.showWordCount !== undefined) setShowWordCount(parsed.showWordCount)
+        if (parsed.showCompileStatus !== undefined) setShowCompileStatus(parsed.showCompileStatus)
+      }
+    } catch { /* localStorage empty or corrupted — use defaults */ }
+    setStateLoaded(true)
   }, [])
 
+  // Save word count setting to StateStore when it changes
+  const handleShowWordCountChange = useCallback((show: boolean) => {
+    setShowWordCount(show)
+    StateStore.setShowWordCount(show)
+  }, [])
 
-
-  // Save project files to localStorage when they change
-  useEffect(() => {
-    localStorage.setItem('siglum-project-files', JSON.stringify(projectFiles))
-  }, [projectFiles])
-
-  // Save sidebar state to localStorage
-  useEffect(() => {
-    localStorage.setItem('siglum-sidebar-expanded', String(sidebarExpanded))
-  }, [sidebarExpanded])
+  // Save compile status setting to StateStore when it changes
+  const handleShowCompileStatusChange = useCallback((show: boolean) => {
+    setShowCompileStatus(show)
+    StateStore.setShowCompileStatus(show)
+  }, [])
 
   // Subscribe to git status - only show conflict modal for actual conflicts
   const lastSyncTimeRef = useRef<Date | null>(null)
+  const latexCodeRef = useRef(latexCode)
+  latexCodeRef.current = latexCode
+  const selectedFilePathRef = useRef(selectedFilePath)
+  selectedFilePathRef.current = selectedFilePath
   useEffect(() => {
     const unsubscribe = GitService.subscribeStatus(async (status) => {
       // Only show modal for actual conflicts (same files edited locally and remotely)
@@ -204,8 +319,11 @@ const App: React.FC = () => {
         lastSyncTimeRef.current = status.lastSync
         // Reload the current file in case it was updated from remote
         try {
-          const content = await GitService.readFile(selectedFilePath)
-          if (content !== null && content !== latexCode) {
+          const content = await FileReaderService.readFile(selectedFilePath)
+          // Guard: file may have switched during the async read
+          if (selectedFilePathRef.current !== selectedFilePath) return
+          if (content !== null && content !== latexCodeRef.current) {
+            EventBus.emit('forceEditorSync')
             setLatexCode(content)
           }
         } catch {
@@ -214,18 +332,26 @@ const App: React.FC = () => {
       }
     })
     return unsubscribe
-  }, [selectedFilePath, latexCode])
+  }, [selectedFilePath])
 
   const handleUseRemote = useCallback(async () => {
-    await GitService.forcePull()
-    // Reload the current file content
-    if (selectedFilePath) {
-      const content = await GitService.getFileContent(selectedFilePath)
-      if (content !== null) {
-        setLatexCode(content)
+    try {
+      await GitService.forcePull()
+      if (selectedFilePath && selectedFilePathRef.current === selectedFilePath) {
+        const content = await FileReaderService.readFile(selectedFilePath)
+        if (selectedFilePathRef.current !== selectedFilePath) return
+        if (content !== null) {
+          EventBus.emit('forceEditorSync')
+          setLatexCode(content)
+        }
       }
+      setShowConflictModal(false)
+    } catch (error) {
+      EventBus.emit('showToast', {
+        type: 'error', duration: 10000,
+        message: error instanceof Error ? error.message : 'Could not download the remote version. Please try again.',
+      })
     }
-    setShowConflictModal(false)
   }, [selectedFilePath])
 
   const handleKeepLocal = useCallback(() => {
@@ -234,44 +360,52 @@ const App: React.FC = () => {
   }, [])
 
   const handleFileSelect = useCallback(async (file: FileItem) => {
-    // Use path if available, otherwise fall back to name (for backwards compatibility)
     const filePath = file.path || `/${file.name}`
-    setSelectedFileId(file.id)
-    setSelectedFilePath(filePath)
 
-    // Load file content from GitService using the full path
-    if (GitService.getStatus().isConnected) {
-      const content = await GitService.readFile(filePath)
-      if (content !== null) {
-        setLatexCode(content)
-        // Trigger immediate compile on document switch if auto-compile is enabled
-        if (autoCompileRef.current) {
-          // Clear any pending debounced compile
-          clearPendingAutoCompile()
-          // Defer compile to allow state to update
-          setTimeout(() => compileRef.current(), 0)
-        }
+    if (isImagePath(filePath)) {
+      setImageError(null)
+      setImageFilePath(filePath)
+      return
+    }
+
+    if (!isTextPath(filePath)) {
+      setImageFilePath(null)
+      setImageError(`Cannot preview .${getExt(filePath)} files`)
+      return
+    }
+
+    setImageFilePath(null)
+    setImageError(null)
+    await openFile(filePath)
+
+    if (autoCompileRef.current) {
+      clearPendingAutoCompile()
+      setTimeout(() => compileRef.current(), 0)
+    }
+  }, [openFile, clearPendingAutoCompile, autoCompileRef, compileRef])
+
+  const handleTabClose = useCallback(async (path: string) => {
+    const isActive = path === currentFile?.path
+    // Evict from recents and cache
+    fileManager.closeFile(path)
+    if (isActive) {
+      // Switch to next recent tab
+      const remaining = getRecentPaths()
+      if (remaining.length > 0) {
+        await openFile(remaining[0])
+      } else {
+        await createNewFile()
       }
     }
-  }, [clearPendingAutoCompile, autoCompileRef, compileRef])
+  }, [currentFile?.path, getRecentPaths, openFile, createNewFile])
 
+  const saveStatus = useAutoSave(fileManager.saveQueue)
   const handleLatexCodeChange = useCallback((newContent: string) => {
     setLatexCode(newContent)
-  }, [])
-
-  // Sync editor changes to git filesystem
-  useEffect(() => {
-    if (selectedFilePath && GitService.getStatus().isConnected && latexCode) {
-      GitService.writeFile(selectedFilePath, latexCode)
+    if (currentFile) {
+      fileManager.stageContent(currentFile.path, newContent)
     }
-  }, [latexCode, selectedFilePath])
-
-
-  // Auto-save with debouncing
-  const saveStatus = useAutoSave(latexCode, {
-    delay: 500,
-    onSave: updateContent
-  })
+  }, [currentFile])
 
   // Warn before closing if there are unsaved changes
   useEffect(() => {
@@ -286,8 +420,6 @@ const App: React.FC = () => {
     window.addEventListener('beforeunload', handleBeforeUnload)
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [saveStatus.hasUnsavedChanges, saveStatus.isSaving])
-
-  // DocumentManager now handles search index updates automatically
 
   // Type-safe event subscriptions via EventBus
   useEventBus('toggleCommandPalette', () => {
@@ -306,58 +438,43 @@ const App: React.FC = () => {
     }
   }, [showDocumentation, closeDocumentation, openDocumentation])
 
-  // Command palette handlers
-  const handleSelectDocument = useCallback(async (documentId: string) => {
-    await loadDocument(documentId)
-  }, [loadDocument])
+  useEventBus('openIntegrations', () => {
+    openDocumentation(false, 'integrations')
+  }, [openDocumentation])
 
+  // Command palette handlers
   const handleSelectFile = useCallback(async (filePath: string, lineNumber?: number) => {
-    // Find the file in projectFiles by path
-    const file = projectFiles.find(f => f.path === filePath)
-    if (file) {
-      await handleFileSelect(file)
-      // After file loads, jump to line if specified
-      if (lineNumber) {
-        // Delay to let the editor update with new content
-        setTimeout(() => {
-          EventBus.emit('goToLine', { line: lineNumber })
-        }, 100)
-      }
+    if (isImagePath(filePath)) {
+      setImageError(null)
+      setImageFilePath(filePath)
+      return
     }
-  }, [projectFiles, handleFileSelect])
+    if (!isTextPath(filePath)) {
+      setImageFilePath(null)
+      setImageError(`Cannot preview .${getExt(filePath)} files`)
+      return
+    }
+    setImageFilePath(null)
+    setImageError(null)
+    await openFile(filePath)
+    if (lineNumber) {
+      setTimeout(() => {
+        EventBus.emit('goToLine', { line: lineNumber })
+      }, 100)
+    }
+  }, [openFile])
+
+  // Handle openDocument event from outline panel (for cross-document sections)
+  useEventBus('openDocument', ({ path, line }: { path: string; line?: number }) => {
+    handleSelectFile(path, line)
+  }, [handleSelectFile])
 
   const handleCreateNewDocument = useCallback(async () => {
-    await createNewDocument()
-  }, [createNewDocument])
+    await createNewFile()
+  }, [createNewFile])
 
   const handleSelectCitation = useCallback((citation: CitationItem) => {
     EventBus.emit('insertText', { text: `\\cite{${citation.citeKey}}` })
-  }, [])
-
-  // Mobile swipe gestures  
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (window.innerWidth >= 768) return
-    setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
-  }, [])
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (window.innerWidth >= 768) return
-    
-    const deltaX = e.changedTouches[0].clientX - touchStart.x
-    const deltaY = e.changedTouches[0].clientY - touchStart.y
-    
-    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 100) {
-      if (deltaX > 0) {
-        setShowPreview(false) // Swipe right - show code
-      } else {
-        setShowPreview(true) // Swipe left - show preview
-      }
-    }
-  }, [touchStart])
-
-  // Handle text selection from editor - placeholder for future cross-highlighting
-  const handleEditorSelection = useCallback((_start: number, _end: number, _selectedText: string) => {
-    // Selection handling - could be used for cross-highlighting with PDF
   }, [])
 
   // Modal handlers for command palette integration
@@ -371,15 +488,16 @@ const App: React.FC = () => {
 
   // Handle citation insertion - add bibtex entry to references.bib
   const handleCitationInsert = useCallback(async (citeKey: string, bibtex: string) => {
-    const bibPath = '/references.bib'
+    const bibPath = '/project/src/references.bib'
 
     // Read existing content or start fresh
     let existingContent = ''
-    if (GitService.getStatus().isConnected) {
-      const content = await GitService.readFile(bibPath)
-      if (content) {
-        existingContent = content
+    try {
+      if (await fileManager.exists(bibPath)) {
+        existingContent = await fileManager.readFile(bibPath)
       }
+    } catch {
+      // File doesn't exist yet
     }
 
     // Check if this citation already exists (by citeKey)
@@ -393,53 +511,21 @@ const App: React.FC = () => {
       ? `${existingContent.trimEnd()}\n\n${bibtex}`
       : bibtex
 
-    // Write to GitService filesystem
-    if (GitService.getStatus().isConnected) {
-      await GitService.writeFile(bibPath, newContent)
-    }
+    // Write to filesystem - fileSystemWatcher will automatically update the tree
+    await fileManager.writeFile(bibPath, newContent)
+  }, [])
 
-    // Also ensure references.bib is in the project file tree
-    const bibFileExists = projectFiles.some(f => f.name === 'references.bib' || f.path === bibPath)
-    if (!bibFileExists) {
-      const newBibFile: FileItem = {
-        id: `bib-${Date.now()}`,
-        name: 'references.bib',
-        type: 'file',
-        path: bibPath
-      }
-      setProjectFiles(prev => [...prev, newBibFile])
-    }
-  }, [projectFiles])
+  const handleEditorSelection = useCallback((_start: number, _end: number, _selectedText: string) => {
+    // reserved for future selection-based features
+  }, [])
 
   // Loading state with improved design
   if (isLoading) {
     return (
       <div className="app">
-        <div className="main-content" style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          minHeight: '100vh',
-          color: '#f5f5f7',
-          fontSize: '17px',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
-          fontWeight: 500,
-          letterSpacing: '-0.01em'
-        }}>
-          <div style={{ 
-            textAlign: 'center',
-            opacity: 0,
-            transform: 'translateY(12px)',
-            animation: 'fadeInUp 0.6s cubic-bezier(0.23, 1, 0.32, 1) forwards'
-          }}>
-            <div style={{ 
-              marginBottom: '20px', 
-              fontSize: '28px',
-              opacity: 0.4,
-              animation: 'spin 2s linear infinite'
-            }}>
-              ⟳
-            </div>
+        <div className="main-content app-fullscreen-state">
+          <div className="app-loading-content">
+            <div className="app-loading-spinner">⟳</div>
             Initializing Siglum...
           </div>
         </div>
@@ -447,40 +533,14 @@ const App: React.FC = () => {
     )
   }
 
-  // Error state with better design
   if (error) {
     return (
       <div className="app">
-        <div className="main-content" style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          minHeight: '100vh',
-          color: '#f0f0f0',
-          fontSize: '16px',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ 
-              marginBottom: '16px', 
-              fontSize: '32px',
-              color: '#ff6b6b' 
-            }}>
-              ⚠
-            </div>
-            <div style={{ color: '#ff6b6b' }}>Error: {error}</div>
-            <button 
-              onClick={() => window.location.reload()} 
-              style={{
-                marginTop: '20px',
-                padding: '8px 16px',
-                background: '#2a2a2a',
-                color: '#f0f0f0',
-                border: '1px solid #333',
-                borderRadius: '6px',
-                cursor: 'pointer'
-              }}
-            >
+        <div className="main-content app-fullscreen-state">
+          <div className="app-error-content">
+            <div className="app-error-icon"><TriangleAlert size={32} aria-hidden="true" /></div>
+            <div className="app-error-message">Error: {error}</div>
+            <button className="app-error-reload" onClick={() => window.location.reload()}>
               Reload
             </button>
           </div>
@@ -490,22 +550,19 @@ const App: React.FC = () => {
   }
 
   // Empty state for first-time users
-  if (!currentDocument) {
+  if (!currentFile) {
       return (
         <div className="app">
           <CommandPalette
             isOpen={showCommandPalette}
             isClosing={isClosingCommandPalette}
             onClose={handleCloseCommandPaletteModal}
-            onSelectDocument={handleSelectDocument}
             onSelectFile={handleSelectFile}
             onSelectCitation={handleSelectCitation}
             onCreateNew={handleCreateNewDocument}
             onOpenHelp={handleOpenHelp}
           />
-          <EmptyState
-            onOpenCommandPalette={handleOpenCommandPaletteModal}
-          />
+          <EmptyState />
           {showDocumentation && (
             <Suspense fallback={null}>
               <DocumentationModal
@@ -524,14 +581,11 @@ const App: React.FC = () => {
   return (
     <div 
       className="app" 
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
     >
       <CommandPalette
         isOpen={showCommandPalette}
         isClosing={isClosingCommandPalette}
         onClose={handleCloseCommandPaletteModal}
-        onSelectDocument={handleSelectDocument}
         onSelectFile={handleSelectFile}
         onSelectCitation={handleSelectCitation}
         onCreateNew={handleCreateNewDocument}
@@ -539,7 +593,7 @@ const App: React.FC = () => {
       />
       <div className="main-content">
         {/* Desktop: Side-by-side panels */}
-        <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
+        {!isMobile && <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
           <PanelGroup direction="horizontal" autoSaveId="editor-preview-panels">
             <Panel ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
               <div className="editor-with-sidebar">
@@ -548,7 +602,6 @@ const App: React.FC = () => {
                     isExpanded={sidebarExpanded}
                     onToggle={handleToggleSidebar}
                     files={projectFiles}
-                    onFilesChange={setProjectFiles}
                     onFileSelect={handleFileSelect}
                     selectedFileId={selectedFileId}
                     triggerGitConnect={triggerGitConnect}
@@ -556,18 +609,38 @@ const App: React.FC = () => {
                     onOpenIntegrations={handleOpenIntegrations}
                   />
                 </Suspense>
-                <LaTeXEditor
-                  value={latexCode}
-                  onChange={handleLatexCodeChange}
-                  onSelectionChange={handleEditorSelection}
-                  documentId={currentDocument?.id}
-                  compilerSettings={compilerSettings}
-                  onCompilerSettingsChange={setCompilerSettings}
-                  compileStatus={compileStatus}
-                  compileTimeMs={compileTimeMs}
-                  onCompile={compile}
-                  onCitationInsert={handleCitationInsert}
-                />
+                <div className="editor-with-tabs">
+                  <TabBar
+                    currentPath={currentFile?.path}
+                    onTabSelect={(path) => openFile(path)}
+                    onTabClose={handleTabClose}
+                    onTabsChanged={handleTabsChanged}
+                  />
+                  {imageFilePath || imageError ? (
+                    <div className="image-preview-pane">
+                      {imageBlobUrl && <img src={imageBlobUrl} alt={imageFilePath?.split('/').pop()} />}
+                      {imageError && <span className="image-preview-error">{imageError}</span>}
+                    </div>
+                  ) : (
+                    <LaTeXEditor
+                      value={latexCode}
+                      onChange={handleLatexCodeChange}
+
+                      documentId={currentFile?.path}
+                      compilerSettings={compilerSettings}
+                      onCompilerSettingsChange={setCompilerSettings}
+                      compileStatus={compileStatus}
+                      compileTimeMs={compileTimeMs}
+                      onCompile={compile}
+                      onCitationInsert={handleCitationInsert}
+                      showWordCount={showWordCount}
+                      onShowWordCountChange={handleShowWordCountChange}
+                      showCompileStatus={showCompileStatus}
+                      onShowCompileStatusChange={handleShowCompileStatusChange}
+                      diagnostics={diagnostics}
+                    />
+                  )}
+                </div>
               </div>
             </Panel>
             
@@ -578,23 +651,22 @@ const App: React.FC = () => {
                 <Panel ref={previewPanelRef} defaultSize={45} minSize={20}>
                   <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
                     <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                      <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} onOpenShare={() => setShowShareModal(true)} documentId={currentDocument?.id} />
+                      <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} documentId={currentFile?.path} />
                     </Suspense>
                   </div>
                 </Panel>
               </>
             )}
           </PanelGroup>
-        </div>
+        </div>}
 
         {/* Mobile: Single panel view */}
-        <div className={`mobile-view ${isLoaded ? 'loaded' : ''}`}>
+        {isMobile && <div className={`mobile-view ${isLoaded ? 'loaded' : ''}`}>
           <Suspense fallback={null}>
             <ProjectSidebar
               isExpanded={sidebarExpanded}
               onToggle={handleToggleSidebar}
               files={projectFiles}
-              onFilesChange={setProjectFiles}
               onFileSelect={handleFileSelect}
               selectedFileId={selectedFileId}
               triggerGitConnect={triggerGitConnect}
@@ -608,28 +680,37 @@ const App: React.FC = () => {
               onClick={handleCollapseSidebar}
             />
           )}
-          {!showPreview ? (
-            <LaTeXEditor
-              value={latexCode}
-              onChange={handleLatexCodeChange}
-              onSelectionChange={handleEditorSelection}
-              onMenuClick={handleExpandSidebar}
-              documentId={currentDocument?.id}
-              compilerSettings={compilerSettings}
-              onCompilerSettingsChange={setCompilerSettings}
-              compileStatus={compileStatus}
-              compileTimeMs={compileTimeMs}
-              onCompile={compile}
-              onCitationInsert={handleCitationInsert}
-            />
-          ) : (
-            <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
-              <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} onOpenShare={() => setShowShareModal(true)} documentId={currentDocument?.id} />
-              </Suspense>
+          {imageFilePath || imageError ? (
+            <div className="image-preview-pane">
+              {imageBlobUrl && <img src={imageBlobUrl} alt={imageFilePath?.split('/').pop()} />}
+              {imageError && <span className="image-preview-error">{imageError}</span>}
             </div>
-          )}
-        </div>
+          ) : <Suspense fallback={<div className="pdf-loading">Loading editor…</div>}><MobileStudio
+            files={projectFiles}
+            pdfData={pdfData}
+            syncTexData={syncTexData}
+            showPreview={showPreview}
+            onPreviewChange={setShowPreview}
+            editorProps={{
+              value: latexCode,
+              onChange: handleLatexCodeChange,
+              onSelectionChange: handleEditorSelection,
+              onMenuClick: handleExpandSidebar,
+              documentId: currentFile?.path,
+              compilerSettings,
+              onCompilerSettingsChange: setCompilerSettings,
+              compileStatus,
+              compileTimeMs,
+              onCompile: compile,
+              onCitationInsert: handleCitationInsert,
+              showWordCount,
+              onShowWordCountChange: handleShowWordCountChange,
+              showCompileStatus,
+              onShowCompileStatusChange: handleShowCompileStatusChange,
+              diagnostics,
+            }}
+          /></Suspense>}
+        </div>}
       </div>
       
       {showDocumentation && (
@@ -640,65 +721,6 @@ const App: React.FC = () => {
             onClose={closeDocumentation}
             onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
             defaultTab={documentationDefaultTab}
-          />
-        </Suspense>
-      )}
-      {showOnboarding && (
-        <Suspense fallback={null}>
-          <Onboarding
-            onComplete={handleOnboardingComplete}
-            onExpandSidebar={handleExpandSidebar}
-            onCollapseSidebar={handleCollapseSidebar}
-            onConnectGithub={handleConnectGithub}
-          />
-        </Suspense>
-      )}
-
-      {showShareModal && (
-        <Suspense fallback={null}>
-          <ShareModal
-            isOpen={showShareModal}
-            isClosing={isClosingShareModal}
-            onClose={() => {
-              setIsClosingShareModal(true)
-              setTimeout(() => {
-                setIsClosingShareModal(false)
-                setShowShareModal(false)
-              }, 200)
-            }}
-            onCreateShare={() => {
-              if (!pdfData) {
-                console.warn('No PDF data to share')
-                return null
-              }
-              const name = currentDocument?.title || 'Untitled'
-              const share = ShareService.createShare(name, pdfData.buffer)
-              // Copy link to clipboard
-              const url = ShareService.getShareUrl(share.id)
-              navigator.clipboard.writeText(url)
-              return share.id
-            }}
-            onViewShare={(shareId) => {
-              // Mark as viewed and open viewer
-              ShareService.markAsViewed(shareId)
-              setShowShareModal(false)
-              setViewingShareId(shareId)
-            }}
-          />
-        </Suspense>
-      )}
-
-      {viewingShareId && (
-        <Suspense fallback={null}>
-          <ShareViewer
-            shareId={viewingShareId}
-            onClose={() => {
-              setViewingShareId(null)
-              // Clear the /share/... URL path
-              if (window.location.pathname.startsWith('/share/')) {
-                window.history.replaceState({}, '', '/')
-              }
-            }}
           />
         </Suspense>
       )}
@@ -765,6 +787,7 @@ const App: React.FC = () => {
           </div>
         )
       })()}
+      <ToastContainer />
     </div>
   )
 }
