@@ -197,7 +197,7 @@
 .mobile-keyboard-open.mobile-viewing-pdf .mobile-dock { width: 100%; grid-template-columns: repeat(3, 1fr); }
 .mobile-keyboard-open.mobile-viewing-pdf .mobile-dock > button > span { display: block; }
 
-.mobile-pdf-region canvas { filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg); }
+.mobile-pdf-region.pdf-dark-mode canvas { filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg); }
 
 /* One stable sheet layout. The visual viewport owns keyboard resizing. */
 .insert-sheet-stable { box-sizing: border-box; padding-bottom: env(safe-area-inset-bottom); }

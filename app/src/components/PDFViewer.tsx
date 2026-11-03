@@ -21,6 +21,9 @@ import syncTexService from '../services/SyncTexService'
 import EventBus from '../services/EventBus'
 import StateStore from '../services/FileStateStore'
 import './PDFViewer.css'
+import { usePdfTheme } from '../hooks/usePdfTheme'
+import PdfThemeToggle from './PdfThemeToggle'
+import PdfPageControl from './PdfPageControl'
 import { readPdfText } from '../utils/pdfText'
 
 // Set worker path
@@ -91,6 +94,7 @@ const ZOOM_PRESETS = [
 ]
 
 const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCompile, isCompiling, documentId, compact = false }) => {
+  const { dark } = usePdfTheme()
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
   const [pageCount, setPageCount] = useState(0)
@@ -126,6 +130,10 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
 
   // Sync highlight state - Y position and key to force animation restart
   const [syncHighlight, setSyncHighlight] = useState<{ y: number; key: number } | null>(null)
+  const revealLocationRef = useRef<(x: number, y: number) => void>(() => {})
+  const pendingJumpRef = useRef<{ page: number; show: () => void } | null>(null)
+  const renderedPageRef = useRef<{ page: number; scale: number; pdf: pdfjsLib.PDFDocumentProxy } | null>(null)
+  useEffect(() => { pendingJumpRef.current = null }, [documentId])
   const syncHighlightTimeoutRef = useRef<number | null>(null)
   const syncHighlightKeyRef = useRef(0)
   const syncIndicatorRef = useRef<HTMLDivElement>(null)
@@ -466,11 +474,11 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
 
   // Forward sync: editor click → PDF (SyncTeX-based precise positioning)
   useEffect(() => {
-    const handleForwardSync = ({ line }: { line: number }) => {
+    const handleForwardSync = ({ line, filename, reveal }: { line: number; filename?: string; reveal?: boolean }) => {
       if (!syncTexService.isAvailable()) return
 
       // Look up PDF location in PDF-point coordinates
-      const result = syncTexService.forwardSync(line)
+      const result = syncTexService.forwardSync(line, filename)
       if (!result) return
 
       // Navigate and show highlight
@@ -492,6 +500,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         const maxY = canvas ? canvas.clientHeight - 4 : canvasY
         const clampedY = Math.max(0, Math.min(canvasY, maxY))
 
+        if (reveal) revealLocationRef.current(result.x * currentRenderScale, clampedY)
+
         // Show highlight with new key to restart CSS animation
         syncHighlightKeyRef.current += 1
         setSyncHighlight({ y: clampedY, key: syncHighlightKeyRef.current })
@@ -500,6 +510,18 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         syncHighlightTimeoutRef.current = window.setTimeout(() => {
           setSyncHighlight(null)
         }, 2000)
+      }
+
+      if (reveal) {
+        // A page change must finish rendering before we position the viewport.
+        if (renderedPageRef.current?.pdf === pdfRef.current && renderedPageRef.current?.page === result.page && renderedPageRef.current?.scale === renderScaleRef.current && currentPageRef.current === result.page) {
+          pendingJumpRef.current = null
+          showHighlight()
+        } else {
+          pendingJumpRef.current = { page: result.page, show: showHighlight }
+          setCurrentPage(result.page)
+        }
+        return
       }
 
       // Navigate to the correct page if needed
@@ -896,6 +918,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         context.drawImage(offscreen, 0, 0)
       }
 
+      renderedPageRef.current = { page: currentPage, scale: renderScale, pdf }
       // Store for reuse by subsequent same-scale renders
       offscreenCanvasRef.current = offscreen
 
@@ -907,6 +930,15 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         if (searchMatches.length > 0) renderSearchHighlights(textContent, viewport)
       } catch (textError) {
         if (thisRenderId === renderIdRef.current && pdfRef.current === pdf) console.warn('PDF text layer unavailable:', textError)
+      }
+      const jump = pendingJumpRef.current
+      if (jump?.page === currentPage) {
+        // Run after the viewer's normal page-centering frames.
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (pendingJumpRef.current !== jump || renderIdRef.current !== thisRenderId) return
+          pendingJumpRef.current = null
+          jump.show()
+        }))
       }
     } catch (err: unknown) {
       // Ignore cancelled renders and results belonging to a superseded PDF.
@@ -1289,6 +1321,17 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
     }, 150)
   }, [renderScale, updateTransform, saveViewerState])
 
+  revealLocationRef.current = (x, y) => {
+    const container = documentRef.current
+    if (!container) return
+    const transform = transformRef.current
+    transform.x = container.clientWidth / 2 - x * transform.scale
+    transform.y = container.clientHeight / 2 - y * transform.scale
+    clampTransform()
+    updateTransform()
+    saveViewerState()
+  }
+
   useEffect(() => {
     const container = documentRef.current
     if (!container || !pdf) return
@@ -1668,11 +1711,12 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         return
       }
 
-      // Don't handle arrow keys if search input is focused
-      if (document.activeElement === searchInputRef.current) return
-
-      if (e.key === 'ArrowLeft') goToPrev()
-      if (e.key === 'ArrowRight') goToNext()
+      // Page navigation belongs to the PDF, never the source editor or an input.
+      const active = document.activeElement as HTMLElement | null
+      if (!active || !containerRef.current?.contains(active) || active.closest('input, textarea, [contenteditable="true"]')) return
+      if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      if (e.key === 'ArrowLeft') { e.preventDefault(); goToPrev() }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goToNext() }
     }
 
     // Use capture: true to intercept before browser's default Cmd+F handling
@@ -1696,7 +1740,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
   }, [showZoomPresets])
 
   return (
-    <div className={`pdf-viewer pdf-dark-mode ${compact ? 'pdf-mobile-view' : ''}`} ref={containerRef} tabIndex={-1}>
+    <div className={`pdf-viewer ${dark ? 'pdf-dark-mode' : ''} ${compact ? 'pdf-mobile-view' : ''}`} ref={containerRef} tabIndex={-1}>
       {/* Top toolbar */}
       <div className="pdf-combined-controls">
         <div className="controls-left">
@@ -1732,9 +1776,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
               >
                 <ChevronLeft size={14} />
               </button>
-              <span className="page-info">
-                {currentPage} / {pageCount}
-              </span>
+              <PdfPageControl className="page-info" page={currentPage} count={pageCount} onChange={page => { pendingJumpRef.current = null; setCurrentPage(page) }} />
               <button
                 className="control-button"
                 onClick={goToNext}
@@ -1783,6 +1825,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         </div>
 
         <div className="controls-right">
+          <PdfThemeToggle className="control-button" />
         </div>
       </div>
 
@@ -1841,7 +1884,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
           </div>
         ) : (
           <div className="pdf-page-wrapper">
-            <div className="pdf-page-filter dark">
+            <div className={`pdf-page-filter ${dark ? 'dark' : ''}`}>
               <canvas ref={canvasRef} className="pdf-page-canvas" />
             </div>
             <div ref={textLayerRef} className="pdf-text-layer" />

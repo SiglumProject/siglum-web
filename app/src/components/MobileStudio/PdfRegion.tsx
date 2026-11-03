@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { parseSyncTeX, forwardSync } from '../../utils/synctex'
+import { usePdfTheme } from '../../hooks/usePdfTheme'
 import { compilationContext } from '../../services/CompilationFiles'
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString()
 export default function PdfRegion({ data, syncTex, line, documentPath, lens = false, height: lensHeight = 150 }: {
   data: Uint8Array | null; syncTex: string | null; line: number; documentPath?: string; lens?: boolean; height?: number
 }) {
+  const { dark } = usePdfTheme()
   const container = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const scroll = useRef<HTMLDivElement>(null)
@@ -72,7 +74,7 @@ export default function PdfRegion({ data, syncTex, line, documentPath, lens = fa
     })().catch(error => { if (!cancelled && error.name !== 'RenderingCancelledException') setMessage('Could not render this preview.') })
     return () => { cancelled = true; task?.cancel() }
   }, [document, map, line, documentPath, renderWidth, lens])
-  return <div className={`mobile-pdf-region ${lens ? 'mobile-pdf-region-interactive' : ''}`} ref={container}>
+  return <div className={`mobile-pdf-region ${dark ? 'pdf-dark-mode' : ''} ${lens ? 'mobile-pdf-region-interactive' : ''}`} ref={container}>
     {message && <div className="mobile-preview-message" role="status">{message}</div>}
     <div ref={scroll} className={lens ? 'mobile-lens-scroll' : undefined} style={lens ? { height: lensHeight } : undefined} role={lens ? 'region' : undefined} aria-label={lens ? 'PDF lens content; scroll or drag to pan' : undefined} tabIndex={lens ? 0 : undefined}
       onPointerDown={event => {

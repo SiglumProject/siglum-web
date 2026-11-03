@@ -227,8 +227,6 @@ const App: React.FC = () => {
     onToggleSidebar: handleToggleSidebar,
     setShowDesktopPreview,
     setShowPreview,
-    editorPanelRef,
-    previewPanelRef,
     onSelectTabByIndex: selectTabByIndex,
   })
 
@@ -595,7 +593,7 @@ const App: React.FC = () => {
         {/* Desktop: Side-by-side panels */}
         {!isMobile && <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
           <PanelGroup direction="horizontal" autoSaveId="editor-preview-panels">
-            <Panel ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
+            <Panel id="editor" order={1} ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
               <div className="editor-with-sidebar">
                 <Suspense fallback={null}>
                   <ProjectSidebar
@@ -648,7 +646,7 @@ const App: React.FC = () => {
               <>
                 <PanelResizeHandle className="resize-handle" />
 
-                <Panel ref={previewPanelRef} defaultSize={45} minSize={20}>
+                <Panel id="preview" order={2} ref={previewPanelRef} defaultSize={45} minSize={20}>
                   <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
                     <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
                       <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} documentId={currentFile?.path} />

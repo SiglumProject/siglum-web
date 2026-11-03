@@ -29,7 +29,10 @@
     "preview:release": "bun scripts/preview-release.ts",
     "test:release": "node scripts/test-release.mjs",
     "test:compile-queue": "node scripts/test-compile-queue.mjs",
-    "test:citation-compile": "node scripts/test-citation-compile.mjs"
+    "test:citation-compile": "node scripts/test-citation-compile.mjs",
+    "test:selection-menu": "node scripts/test-selection-menu.mjs",
+    "test:keyboard-shortcuts": "node scripts/test-keyboard-shortcuts.mjs",
+    "test:session-recovery": "node scripts/test-session-recovery.mjs"
   },
   "devDependencies": {
     "typescript": "~5.6.0",

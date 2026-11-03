@@ -428,10 +428,12 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
 
   const handleSyncNow = async () => {
     try {
-      await GitService.sync()
-      EventBus.emit('showToast', { message: 'Synced with GitHub', type: 'success' })
+      const result = await GitService.sync()
+      EventBus.emit('showToast', result.hasConflict
+        ? { message: 'Resolve the Git conflict before syncing.', type: 'error' }
+        : { message: 'Synced with GitHub', type: 'success' })
     } catch {
-      EventBus.emit('showToast', { message: 'Sync failed', type: 'error' })
+      EventBus.emit('showToast', { message: GitService.getStatus().error || 'Sync failed', type: 'error' })
     }
   }
 
@@ -801,7 +803,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
                   if (zoteroStatus.connected) handleZoteroSync()
                 }}
                 disabled={gitStatus.isSyncing || zoteroStatus.syncing}
-                title="Sync"
+                title={gitStatus.error ? `Sync failed: ${gitStatus.error}` : "Sync"}
               >
                 <RefreshCw size={14} className={(gitStatus.isSyncing || zoteroStatus.syncing) ? 'spinning' : ''} />
               </button>

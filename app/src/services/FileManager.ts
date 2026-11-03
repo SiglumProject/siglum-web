@@ -1,3 +1,4 @@
+import { BACKEND_STORAGE_KEY } from '@siglum/filesystem/constants'
 /**
  * FileManager - Path-based file operations for the unified filesystem
  *
@@ -62,9 +63,11 @@ class FileManagerService {
     if (this.initialized) return
     if (this.initPromise) return this.initPromise
 
-    this.initPromise = this._initialize()
+    this.initPromise = this._initialize().then(
+      () => { this.initialized = true },
+      error => { this.initPromise = null; throw error }
+    )
     await this.initPromise
-    this.initialized = true
   }
 
   private async _initialize(): Promise<void> {
@@ -132,6 +135,12 @@ class FileManagerService {
 
     // Normalize path
     const normalizedPath = this.normalizePath(path)
+
+    // Restoring a Git document must not race the background Git connection check.
+    // Local repository access does not depend on network/authentication succeeding.
+    if (normalizedPath.startsWith('/git/') && !fileSystem.isMounted('/git')) {
+      await fileSystem.mountAuto('/git', { namespace: 'siglum-git' })
+    }
 
     // Check if already open
     if (this.openFiles.has(normalizedPath)) {
@@ -280,6 +289,7 @@ class FileManagerService {
         await this.openFile(nextPath)
       } else {
         this.currentPath = null
+        this.saveCurrentFile()
         this.notify()
       }
     }
@@ -527,11 +537,15 @@ class FileManagerService {
   }
 
   private saveCurrentFile(): void {
-    if (this.currentPath) {
-      try {
+    try {
+      if (this.currentPath) {
         localStorage.setItem(CURRENT_FILE_KEY, this.currentPath)
-      } catch { /* ignore */ }
-    }
+        // Confirm fallback storage only after a document has actually been read/written.
+        const backend = fileSystem.getBackendType(this.currentPath)
+        if (backend) localStorage.setItem(BACKEND_STORAGE_KEY, backend)
+      }
+      else localStorage.removeItem(CURRENT_FILE_KEY)
+    } catch { /* ignore */ }
   }
 
   /**

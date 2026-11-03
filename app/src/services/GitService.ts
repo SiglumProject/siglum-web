@@ -22,10 +22,15 @@ const gitService = getGitService({
 
 // Switch file tree root when git connects/disconnects
 gitService.subscribeStatus(async (status) => {
-  if (status.isConnected) {
-    await fileSystemWatcher.setScanRoot(GIT_ROOT)
-  } else {
-    await fileSystemWatcher.resetScanRoot()
+  try {
+    if (status.isConnected) {
+      await fileSystemWatcher.setScanRoot(GIT_ROOT)
+    } else {
+      await fileSystemWatcher.resetScanRoot()
+    }
+  } catch {
+    // File-manager initialization presents storage failures with a retry action.
+    // Status listeners must not turn them into unhandled promise rejections.
   }
 })
 

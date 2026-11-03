@@ -103,6 +103,8 @@ export function useFileManager(): UseFileManagerReturn {
           } catch (err) {
             console.warn('[useFileManager] Failed to restore:', lastPath, err)
             if (cancelled) return
+            // Preserve the pointer instead of silently opening a welcome/unrelated file.
+            throw new Error(`Could not reopen "${lastPath.split('/').pop()}". Reload to retry. Your saved document selection has been kept.`)
           }
         }
 

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import EventBus from '../services/EventBus'
 
-type DocumentationTab = 'guide' | 'collaboration' | 'sharing' | 'integrations' | 'faq' | 'support'
+type DocumentationTab = 'guide' | 'collaboration' | 'integrations' | 'faq' | 'support'
 
 interface UseModalsReturn {
   showCommandPalette: boolean

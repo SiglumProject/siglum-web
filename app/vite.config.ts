@@ -6,7 +6,10 @@ import { copyFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  // Keep diagnostics in dev; remove routine logs from application and dependency bundles.
+  // Warnings, errors, and compiler log callbacks remain intact.
+  esbuild: command === 'build' ? { pure: ['console.log', 'console.info', 'console.debug'] } : undefined,
   plugins: [
     {
       name: 'sync-engine-worker',
@@ -102,4 +105,4 @@ export default defineConfig({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-})
+}))

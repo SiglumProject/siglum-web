@@ -1,0 +1,6 @@
+.pdf-page-control { display: inline-flex; align-items: center; justify-content: center; min-width: 0; }
+.pdf-page-counter-button { border: 0; background: transparent; color: inherit; padding: 0; font: inherit; white-space: nowrap; cursor: pointer; }
+.pdf-page-counter-button:hover { color: var(--color-text-primary); }
+.pdf-page-input { box-sizing: border-box; width: 4.5ch; max-width: 100%; min-width: 0; height: 24px; border: 1px solid #a99d8b; border-radius: 4px; background: #28241f; color: #f2ece3; font: inherit; font-size: 16px; text-align: center; outline: none; }
+.mobile-pdf-toolbar .pdf-page-counter-button { min-width: 0; width: 100%; padding: 0; font-size: 11px; }
+.mobile-pdf-toolbar .pdf-page-input { width: 100%; height: 32px; }

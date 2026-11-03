@@ -3,6 +3,9 @@ import { Code2, Download, Minus, Plus } from 'lucide-react'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { readPdfText } from '../../utils/pdfText'
 import './MobilePDFViewer.css'
+import { usePdfTheme } from '../../hooks/usePdfTheme'
+import PdfThemeToggle from '../PdfThemeToggle'
+import PdfPageControl from '../PdfPageControl'
 
 pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString()
 const clampZoom = (zoom: number) => Math.max(1, Math.min(4, zoom))
@@ -83,6 +86,7 @@ function Page({ pdf, number, size, width, scrollRoot }: {
 export default function MobilePDFViewer({ pdfData, documentId, onCompile, isCompiling, onClose }: {
   pdfData?: Uint8Array; documentId: string; onCompile?: () => void; isCompiling?: boolean; onClose: () => void
 }) {
+  const { dark } = usePdfTheme()
   const root = useRef<HTMLDivElement>(null)
   const pages = useRef<HTMLDivElement>(null)
   const [pdf, setPdf] = useState<pdfjs.PDFDocumentProxy | null>(null)
@@ -188,13 +192,20 @@ export default function MobilePDFViewer({ pdfData, documentId, onCompile, isComp
     link.href = url; link.download = (documentId.split('/').pop() || 'document.tex').replace(/\.tex$/i, '') + '.pdf'
     link.click(); window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
   }
-  return <div className="mobile-pdf-viewer">
+  return <div className={`mobile-pdf-viewer ${dark ? 'pdf-dark-mode' : ''}`}>
     <div className="mobile-pdf-toolbar" role="toolbar" aria-label="PDF controls">
       <button aria-label="Back to source" onClick={onClose}><Code2 size={18} /></button>
-      <span className="mobile-pdf-count" aria-label={`Page ${currentPage} of ${pdf?.numPages || 0}`}>{pdf ? `${currentPage} / ${pdf.numPages}` : 'PDF'}</span>
+      <PdfPageControl className="mobile-pdf-count" page={currentPage} count={pdf?.numPages || 0} onChange={number => {
+        const element = pages.current?.querySelector<HTMLElement>(`[data-page="${number}"]`)
+        const container = root.current
+        if (!element || !container) return
+        container.scrollTop += element.getBoundingClientRect().top - container.getBoundingClientRect().top - 8
+        setCurrentPage(number)
+      }} />
       <button aria-label="Zoom out PDF" disabled={!pdf || zoom <= 1} onClick={() => changeZoom(zoom - 0.5)}><Minus size={18} /></button>
       <button className="mobile-pdf-fit" aria-label="Fit PDF to width" disabled={!pdf} onClick={() => changeZoom(1)}>{Math.round(zoom * 100)}%<small>Fit</small></button>
       <button aria-label="Zoom in PDF" disabled={!pdf || zoom >= 4} onClick={() => changeZoom(zoom + 0.5)}><Plus size={18} /></button>
+      <PdfThemeToggle size={18} />
       <button aria-label="Download PDF" disabled={!pdfData} onClick={download}><Download size={18} /></button>
     </div>
     <div ref={root} className="mobile-pdf-scroll" role="region" aria-label="Scrollable PDF" tabIndex={0} onScroll={() => {

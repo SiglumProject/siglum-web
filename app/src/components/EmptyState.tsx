@@ -1157,7 +1157,7 @@ const EmptyState: React.FC = () => {
             </div>
           </div>
           <p className="int-footer">
-            Something missing? <a href="https://github.com/SiglumProject/siglum/discussions" target="_blank" rel="noopener noreferrer">Suggest an integration</a>
+            Something missing? <a href="https://github.com/SiglumProject/siglum/issues/new?title=Integration%20request%3A%20" target="_blank" rel="noopener noreferrer">Suggest an integration</a>
           </p>
         </section>
 

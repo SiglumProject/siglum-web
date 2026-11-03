@@ -9,10 +9,11 @@ import {
   ArrowRight,
   ArrowLeft,
   Check,
+  ChevronDown,
+  AlertCircle,
   RefreshCw,
   Plug,
   Users,
-  Share2,
   MoveLeft,
   MoveRight,
   Menu,
@@ -33,7 +34,7 @@ interface DocumentationModalProps {
   defaultTab?: TabId
 }
 
-type TabId = 'guide' | 'collaboration' | 'sharing' | 'integrations' | 'faq' | 'support'
+type TabId = 'guide' | 'collaboration' | 'integrations' | 'faq' | 'support'
 
 interface Tab {
   id: TabId
@@ -44,7 +45,6 @@ interface Tab {
 const tabs: Tab[] = [
   { id: 'guide', label: 'Getting Started', icon: <FileText size={16} /> },
   { id: 'collaboration', label: 'Collaboration', icon: <Users size={16} /> },
-  { id: 'sharing', label: 'Sharing', icon: <Share2 size={16} /> },
   { id: 'integrations', label: 'Integrations', icon: <Plug size={16} /> },
   { id: 'faq', label: 'FAQ', icon: <MessageCircle size={16} /> },
   { id: 'support', label: 'Support', icon: <LifeBuoy size={16} /> }
@@ -65,6 +65,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
     syncInterval: '15min'
   })
   const [isGitConnecting, setIsGitConnecting] = useState(false)
+  const [replacementToken, setReplacementToken] = useState('')
   const [gitError, setGitError] = useState<string | null>(null)
 
   // Zotero state
@@ -90,6 +91,11 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
     }
   }, [isOpen, defaultTab])
 
+  const selectTopic = (topic: TabId) => {
+    setActiveTab(topic)
+    if (topic !== 'integrations') setSelectedIntegration(null)
+  }
+
   // Git handlers
   const handleGitConnect = async () => {
     if (!gitConfig.repoUrl?.trim() || !gitConfig.token?.trim()) return
@@ -114,6 +120,16 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
       await GitService.sync()
     } catch (e) {
       console.error('Git sync failed:', e)
+    }
+  }
+
+  const handleUpdateToken = async (event: React.FormEvent) => {
+    event.preventDefault()
+    try {
+      await GitService.updateToken(replacementToken)
+      setReplacementToken('')
+    } catch {
+      // The service publishes the actionable error in gitStatus.
     }
   }
 
@@ -251,7 +267,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                       <div className="shortcut-keys">
                         <kbd>⌘</kbd><kbd>K</kbd>
                       </div>
-                      <span>Open command palette (this is the big one)</span>
+                      <span>Open command palette</span>
                     </div>
                     <div className="shortcut-item">
                       <div className="shortcut-keys">
@@ -291,7 +307,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                     </div>
                     <div className="shortcut-item">
                       <div className="shortcut-keys">
-                        <kbd>⌘</kbd><kbd>\\</kbd>
+                        <kbd>⌘</kbd><kbd>{'\\'}</kbd>
                       </div>
                       <span>Toggle PDF preview</span>
                     </div>
@@ -322,7 +338,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                   </div>
                 </div>
 
-                <p className="doc-note">On Windows/Linux, use Ctrl instead of ⌘</p>
+                <p className="doc-note">On Windows/Linux, use Ctrl instead of ⌘. Formatting and section navigation work while the source editor is focused.</p>
               </>
             )}
           </div>
@@ -413,41 +429,6 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
           </div>
         )
 
-      case 'sharing':
-        return (
-          <div className="doc-content">
-            <h2>Getting Feedback</h2>
-            <p className="doc-lead">
-              We're building a way to share your PDF for comments. Coming soon.
-            </p>
-
-            <div className="collab-section">
-              <h3>How it will work</h3>
-              <p>
-                You'll be able to create a snapshot of your PDF and share a link with
-                your advisor, collaborator, or anyone who needs to review it. They'll
-                be able to leave comments directly on the document.
-              </p>
-            </div>
-
-            <div className="collab-section">
-              <h3>Your source stays private</h3>
-              <p>
-                Sharing will only upload a PDF snapshot for reviewers to see. Your
-                source files will never leave your browser.
-              </p>
-            </div>
-
-            <div className="collab-section">
-              <h3>For now: use GitHub</h3>
-              <p>
-                Until sharing is ready, you can collaborate through GitHub. Connect
-                a repository and anyone with access can work on the same project.
-              </p>
-            </div>
-          </div>
-        )
-
       case 'integrations':
         return (
           <div className="doc-content integrations-split">
@@ -458,7 +439,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
               >
                 <Github size={16} />
                 <span>GitHub</span>
-                {gitStatus.isConnected && <span className="integrations-nav-dot" />}
+                {gitStatus.isConnected && !gitStatus.error && <span className="integrations-nav-dot" />}
               </button>
               <button
                 className={`integrations-nav-btn ${selectedIntegration === 'zotero' ? 'active' : ''}`}
@@ -489,10 +470,21 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
 
                   {gitStatus.isConnected ? (
                     <>
-                      <div className="integration-status-banner connected">
-                        <Check size={14} />
-                        <span>Connected</span>
+                      <div className={`integration-status-banner ${gitStatus.error ? 'failed' : gitStatus.remoteStatus === 'ok' ? 'connected' : ''}`}>
+                        {gitStatus.error ? <AlertCircle size={14} /> : <Check size={14} />}
+                        <span>{gitStatus.error ? 'Sync failed' : gitStatus.isSyncing ? 'Syncing…' : gitStatus.remoteStatus === 'ok' ? 'Connected' : 'Repository linked'}</span>
                       </div>
+                      {gitStatus.error && <p className="integration-sync-error" role="alert">{gitStatus.error}</p>}
+                      {gitStatus.needsAuthentication && (
+                        <form className="integration-token-form" onSubmit={handleUpdateToken}>
+                          <label htmlFor="replacement-git-token">New access token</label>
+                          <input id="replacement-git-token" type="password" autoComplete="off"
+                            value={replacementToken} onChange={event => setReplacementToken(event.target.value)}
+                            placeholder="Paste your replacement token" />
+                          <button className="integration-action-btn secondary" type="submit"
+                            disabled={gitStatus.isSyncing || !replacementToken.trim()}>Update token</button>
+                        </form>
+                      )}
 
                       <div className="integration-fields">
                         <div className="integration-field">
@@ -517,7 +509,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                         </div>
                         {gitStatus.lastSync && (
                           <div className="integration-field">
-                            <label>Last synced</label>
+                            <label>Last successful sync</label>
                             <div className="integration-field-value">
                               {new Date(gitStatus.lastSync).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZoneName: 'short' })}
                             </div>
@@ -705,9 +697,7 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
                 <summary>Do you store my documents on your server?</summary>
                 <p>
                   No. Your source files stay in your browser and never touch our servers.
-                  Compilation happens locally on your machine. We're working on a sharing
-                  feature that will let you send a PDF snapshot for feedback, but even
-                  then your source files will remain local.
+                  Compilation happens locally on your machine.
                 </p>
               </details>
 
@@ -883,16 +873,20 @@ const DocumentationModal: React.FC<DocumentationModalProps> = ({ isOpen, isClosi
     >
       <div className="doc-modal-container">
         <div className="doc-sidebar">
+          <div className="doc-mobile-topic-picker">
+            <select aria-label="Help topic" value={activeTab}
+              onChange={event => selectTopic(event.target.value as TabId)}>
+              {tabs.map(tab => <option key={tab.id} value={tab.id}>{tab.label}</option>)}
+            </select>
+            <ChevronDown size={18} aria-hidden="true" />
+          </div>
           <nav className="doc-nav" aria-label="Help topics">
             {tabs.map(tab => (
               <button
                 key={tab.id}
                 aria-current={activeTab === tab.id ? 'page' : undefined}
                 className={`doc-nav-item ${activeTab === tab.id ? 'active' : ''}`}
-                onClick={() => {
-                  setActiveTab(tab.id)
-                  if (tab.id !== 'integrations') setSelectedIntegration(null)
-                }}
+                onClick={() => selectTopic(tab.id)}
               >
                 <span className="doc-nav-icon">{tab.icon}</span>
                 <span className="doc-nav-label">{tab.label}</span>

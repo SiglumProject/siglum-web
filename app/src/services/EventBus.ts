@@ -48,7 +48,7 @@ export interface EventMap {
 
   // PDF/Editor sync events
   syncModeChanged: { enabled: boolean }
-  forwardSync: { line: number; lineText: string }
+  forwardSync: { line: number; lineText: string; filename?: string; reveal?: boolean }
   inverseSync: { context: string; word: string; page: number; yFraction: number }
 
   // Editor value override — resets echo-suppression flag so the next value prop is applied

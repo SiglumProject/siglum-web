@@ -17,6 +17,7 @@ import EventBus from '../../services/EventBus'
 import GitService from '../../services/GitService'
 import syncTexService from '../../services/SyncTexService'
 import CitationPopover from '../CitationPopover'
+import SelectionContextMenu from '../SelectionContextMenu'
 import stateStore from '../../services/FileStateStore'
 import ProjectStore from '../../services/ProjectStore'
 import FileReaderService from '../../services/FileReaderService'
@@ -722,6 +723,20 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
   const editorContainerRef = useRef<HTMLDivElement>(null)
   const syncModeRef = useRef(false) // Track sync mode from PDFViewer toggle
   const editorViewRef = useRef<EditorView | null>(null)
+  const [selectionMenu, setSelectionMenu] = useState<{ x: number; y: number; line: number; text: string; canJump: boolean } | null>(null)
+  const closeSelectionMenu = useCallback((restoreFocus: boolean) => {
+    setSelectionMenu(null)
+    if (restoreFocus) editorViewRef.current?.focus()
+  }, [])
+  useEffect(() => { setSelectionMenu(null) }, [documentId, value])
+  const openSelectionMenu = (x: number, y: number) => {
+    const view = editorViewRef.current
+    if (!view || view.state.selection.main.empty || mobileApiRef) return false
+    const selection = view.state.selection.main
+    const line = view.state.doc.lineAt(selection.from).number
+    setSelectionMenu({ x, y, line, text: view.state.sliceDoc(selection.from, selection.to), canJump: Boolean(syncTexService.forwardSync(line, documentId)) })
+    return true
+  }
   const [consoleOpen, setConsoleOpen] = useState(false)
   const [logs, setLogs] = useState<{time: string, type: string, message: string}[]>([])
   const [consoleHeight, setConsoleHeight] = useState(() => {
@@ -1272,13 +1287,14 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
           return true
         },
       },
-      // Cmd+S - trigger compile
+      // Formatting stays scoped to the source editor.
       {
-        key: 'Mod-s',
-        run: () => {
-          EventBus.emit('triggerCompile')
-          return true
-        },
+        key: 'Mod-b',
+        run: view => { wrapSelectionInView(view, '\\textbf{', '}'); return true },
+      },
+      {
+        key: 'Mod-i',
+        run: view => { wrapSelectionInView(view, '\\textit{', '}'); return true },
       },
       // Cmd+Shift+M - inline math
       {
@@ -2260,6 +2276,18 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
 
   return (
     <>
+    {selectionMenu && <SelectionContextMenu {...selectionMenu}
+      onClose={closeSelectionMenu}
+      onJump={() => {
+        EventBus.emit('forwardSync', { line: selectionMenu.line, lineText: selectionMenu.text, filename: documentId, reveal: true })
+        closeSelectionMenu(true)
+      }}
+      onCopy={async () => {
+        try { await navigator.clipboard.writeText(selectionMenu.text) }
+        catch { EventBus.emit('showToast', { message: 'Could not copy. Use Command+C or Ctrl+C.', type: 'error' }) }
+        closeSelectionMenu(true)
+      }}
+    />}
     <div className="editor-toolbar">
       <div className="toolbar-left">
         {onMenuClick && (
@@ -2452,7 +2480,18 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
             : (showCompileStatus || showWordCount) ? 'calc(100% - 24px)' : undefined
         }}
       >
-        <div ref={editorContainerRef} className="codemirror-container" />
+        <div ref={editorContainerRef} className="codemirror-container"
+          onContextMenu={event => {
+            if (event.shiftKey || !(event.target as Element).closest('.cm-content')) return
+            if (openSelectionMenu(event.clientX, event.clientY)) event.preventDefault()
+          }}
+          onKeyDownCapture={event => {
+            if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return
+            const view = editorViewRef.current
+            const rect = view?.coordsAtPos(view.state.selection.main.from)
+            if (rect && openSelectionMenu(rect.left, rect.bottom)) { event.preventDefault(); event.stopPropagation() }
+          }}
+        />
         {diagnostics.length > 0 && editorViewRef.current && (() => {
           const view = editorViewRef.current!
           const totalLines = view.state.doc.lines

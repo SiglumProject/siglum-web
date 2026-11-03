@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
-import type { ImperativePanelHandle } from 'react-resizable-panels'
 import { fileManager } from '../services/FileManager'
+import EventBus from '../services/EventBus'
 
 interface UseKeyboardShortcutsOptions {
   showCommandPalette: boolean
@@ -15,8 +15,6 @@ interface UseKeyboardShortcutsOptions {
   onToggleSidebar: () => void
   setShowDesktopPreview: React.Dispatch<React.SetStateAction<boolean>>
   setShowPreview: React.Dispatch<React.SetStateAction<boolean>>
-  editorPanelRef: React.RefObject<ImperativePanelHandle | null>
-  previewPanelRef: React.RefObject<ImperativePanelHandle | null>
   onSelectTabByIndex?: (index: number) => void
 }
 
@@ -33,8 +31,6 @@ export function useKeyboardShortcuts({
   onToggleSidebar,
   setShowDesktopPreview,
   setShowPreview,
-  editorPanelRef,
-  previewPanelRef,
   onSelectTabByIndex,
 }: UseKeyboardShortcutsOptions): void {
   // Use refs for state/callbacks to keep the keydown listener stable (never re-added)
@@ -71,10 +67,22 @@ export function useKeyboardShortcuts({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.defaultPrevented || e.isComposing) return
       const r = refs.current
+      const key = e.key.toLowerCase()
+      const mod = e.metaKey || e.ctrlKey
+
+      // Compile from the editor, PDF, or toolbar; the editor keymap alone misses
+      // the shortcut as soon as focus leaves CodeMirror.
+      if (mod && key === 's' && !e.shiftKey && !e.altKey) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!e.repeat) EventBus.emit('triggerCompile')
+        return
+      }
 
       // Command palette shortcuts (global)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
+      if ((e.metaKey || e.ctrlKey) && key === 'k' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
         e.stopPropagation()
 
@@ -89,8 +97,9 @@ export function useKeyboardShortcuts({
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'F') {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && (key === 'f' || key === 'k')) {
         e.preventDefault()
+        e.stopPropagation()
         if (r.showCommandPalette) {
           r.onCloseCommandPalette()
         } else {
@@ -102,19 +111,19 @@ export function useKeyboardShortcuts({
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+      if ((e.metaKey || e.ctrlKey) && key === 'n' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
         r.onCreateNewDocument()
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+      if ((e.metaKey || e.ctrlKey) && key === 'w' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
         r.onCloseCurrentDocument()
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
+      if ((e.metaKey || e.ctrlKey) && key === 'h' && !e.shiftKey && !e.altKey) {
         e.preventDefault()
 
         if (r.showDocumentation) {
@@ -125,7 +134,7 @@ export function useKeyboardShortcuts({
         return
       }
 
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && key === 'e' && !e.altKey) {
         e.preventDefault()
         fileManager.exportFile()
         return
@@ -138,23 +147,27 @@ export function useKeyboardShortcuts({
         return
       }
 
-      // Cmd+1..9 - switch to tab by index
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key >= '1' && e.key <= '9') {
+      // Match the layout shortcuts shown in Help. Alt+number selects a tab.
+      if (mod && !e.shiftKey && !e.altKey && (key === '1' || key === '2')) {
         e.preventDefault()
-        r.onSelectTabByIndex?.(parseInt(e.key, 10) - 1)
+        e.stopPropagation()
+        const visible = key === '2'
+        if (window.innerWidth >= 768) {
+          r.setShowDesktopPreview(visible)
+        } else r.setShowPreview(visible)
         return
       }
-      // Cmd+\ - toggle/balance panels
-      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      if (mod && e.altKey && !e.shiftKey && e.code.startsWith('Digit') && e.code >= 'Digit1' && e.code <= 'Digit9') {
+        e.preventDefault()
+        e.stopPropagation()
+        r.onSelectTabByIndex?.(Number(e.code.slice(-1)) - 1)
+        return
+      }
+      // Cmd+\ - toggle PDF preview
+      if (mod && !e.shiftKey && !e.altKey && (e.key === '\\' || e.code === 'Backslash')) {
         e.preventDefault()
         if (window.innerWidth >= 768) {
           r.setShowDesktopPreview(prev => !prev)
-          if (r.showDesktopPreview) {
-            setTimeout(() => {
-              editorPanelRef.current?.resize(50)
-              previewPanelRef.current?.resize(50)
-            }, 0)
-          }
         } else {
           r.setShowPreview(prev => !prev)
         }
@@ -163,5 +176,5 @@ export function useKeyboardShortcuts({
 
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [editorPanelRef, previewPanelRef]) // Stable refs only — listener never re-added
+  }, []) // State and callbacks are read from refs.
 }

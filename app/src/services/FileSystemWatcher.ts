@@ -54,9 +54,11 @@ class FileSystemWatcherService {
     if (this.initialized) return
     if (this.initPromise) return this.initPromise
 
-    this.initPromise = this._initialize()
+    this.initPromise = this._initialize().then(
+      () => { this.initialized = true },
+      error => { this.initPromise = null; throw error }
+    )
     await this.initPromise
-    this.initialized = true
   }
 
   private async _initialize(): Promise<void> {

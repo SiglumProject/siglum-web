@@ -1,5 +1,7 @@
 /* Help uses a reading font and higher contrast independently of editor typography. */
 .documentation-modal {
+  --color-border: rgba(232, 227, 211, 0.12);
+  --color-border-subtle: rgba(232, 227, 211, 0.08);
   --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --color-text-secondary: #bdb7b0;
   --color-text-tertiary: #aaa39b;
@@ -10,7 +12,7 @@
 }
 .documentation-modal .base-modal-header { flex-shrink: 0; }
 .documentation-modal .base-modal-header h2 { font-size: 22px; }
-.documentation-modal :is(button, a, summary, input):focus-visible {
+.documentation-modal :is(button, a, summary, input, select):focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 3px;
 }
@@ -34,7 +36,7 @@
   background: var(--color-bg);
   border-radius: 12px;
   box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--color-border);
+  border: none;
   max-height: calc(100dvh - 64px);
   width: 820px;
   max-width: 90vw;
@@ -45,6 +47,8 @@
   height: min(640px, calc(100dvh - 140px));
   min-height: 0;
 }
+
+.doc-mobile-topic-picker { display: none; }
 
 /* Sidebar */
 .doc-sidebar {
@@ -813,7 +817,7 @@
 }
 
 /* Responsive */
-@media (max-width: 700px) {
+@media (max-width: 767px) {
   .doc-modal-container {
     flex-direction: column;
     max-height: none;
@@ -826,27 +830,42 @@
     border-bottom: 1px solid rgba(232, 227, 211, 0.08);
   }
 
-  .doc-nav {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow-x: visible;
-    padding: 8px 12px;
-    gap: 4px;
+  .doc-nav { display: none; }
+
+  .doc-mobile-topic-picker {
+    display: block;
+    position: relative;
+    margin: 8px 16px;
   }
 
-  .doc-nav-item {
-    width: auto;
-    flex-shrink: 0;
-    padding: 6px 12px;
-    font-size: 14px;
+  .doc-mobile-topic-picker select {
+    display: block;
+    appearance: none;
+    -webkit-appearance: none;
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 40px 10px 12px;
+    border: 1px solid var(--color-border);
+    border-radius: 8px;
+    background: rgba(232, 227, 211, 0.04);
+    color: var(--color-text-primary);
+    color-scheme: dark;
+    font: inherit;
+    font-size: 16px;
+    cursor: pointer;
   }
 
-  .doc-nav-icon {
-    margin-right: 6px;
+  .doc-mobile-topic-picker svg {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--color-text-secondary);
+    pointer-events: none;
   }
 
   .doc-main {
-    padding: 24px;
+    padding: 20px 16px;
     max-height: none;
   }
 
@@ -1406,15 +1425,23 @@
 }
 
 /* Keep both levels of help navigation reachable on phones. */
-@media (max-width: 700px) {
+@media (max-width: 767px) {
   .documentation-modal-overlay { padding: 16px 12px !important; }
   .base-modal.documentation-modal { max-width: 100%; max-height: calc(100dvh - 32px); }
   .doc-sidebar { flex-shrink: 0; }
-  .doc-nav-item { min-height: 44px; width: 100%; }
-  .doc-content.integrations-split { flex-direction: column; }
+  .documentation-modal .base-modal-close-button { width: 44px; height: 44px; }
+  .documentation-modal .base-modal-header { padding: 8px 16px; }
+  .doc-content.integrations-split { flex-direction: column; margin: -20px -16px; width: calc(100% + 32px); height: auto; min-height: calc(100% + 40px); }
   .integrations-nav { width: 100%; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--color-border); }
   .integrations-nav-btn { width: auto; }
   .integrations-suggest-link { margin-top: 0; }
-  .integrations-content { min-height: 0; min-width: 0; padding: 20px 24px; }
+  .integrations-content { flex: none; min-height: 0; min-width: 0; padding: 20px 16px; overflow: visible; }
+  .integration-field input { min-width: 0; font-size: 16px; }
   .collab-comparison { grid-template-columns: 1fr; }
 }
+
+.integration-status-banner.failed { color: var(--color-text-primary); background: rgba(180, 75, 65, 0.14); }
+.integration-sync-error { margin: 0 0 16px; line-height: 1.5; color: var(--color-text-primary); }
+.integration-token-form { display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px; }
+.integration-token-form input { min-width: 0; width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg-secondary); color: var(--color-text-primary); font: inherit; font-size: 16px; }
+.integration-token-form button { align-self: flex-start; }
