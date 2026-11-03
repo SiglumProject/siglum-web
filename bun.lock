@@ -60,7 +60,7 @@
     },
     "app": {
       "name": "@siglum/app",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@codemirror/autocomplete": "^6.20.0",
         "@codemirror/commands": "^6.10.1",
@@ -104,7 +104,7 @@
     },
     "worker": {
       "name": "@siglum/worker",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": {
         "@siglum/engine": "workspace:*",
         "fflate": "^0.8.2",
