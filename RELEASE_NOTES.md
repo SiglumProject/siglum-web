@@ -36,9 +36,12 @@ The staged production build is exercised locally against the exact immutable
 runtime. Remote upload and deployment are separate steps, followed by remote
 checksum verification. See README.md for the release order.
 
-## Known limits and final device check
+## Known limits and device confirmation
 
 Biber is not bundled. Use BibTeX, biblatex's BibTeX backend, or a prebuilt `.bbl`.
-A real iPhone check is still required; Chromium touch emulation and WebKit tests
-cannot fully reproduce the device keyboard or memory limits. No release has been
-published by the local preparation commands.
+Adam confirmed the local preview works on his physical iPhone after checking
+compilation, PDF scrolling/zooming, and table editing. This completes the requested
+physical-device check alongside the automated browser tests.
+
+No release has been published by the local preparation commands. The deployed
+site still needs verification after publication.
