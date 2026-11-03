@@ -36,7 +36,7 @@
 }
 
 .base-modal {
-  background: var(--color-base-lighter);
+  background: var(--color-bg);
   backdrop-filter: blur(40px);
   -webkit-backdrop-filter: blur(40px);
   border-radius: 12px;
@@ -82,7 +82,7 @@
   justify-content: space-between;
   padding: 16px 20px;
   border-bottom: 1px solid var(--color-border);
-  background: var(--color-base-darker);
+  background: var(--color-bg);
 }
 
 .base-modal-header h2 {
@@ -90,7 +90,6 @@
   font-size: 14px;
   font-weight: 600;
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
   letter-spacing: -0.01em;
 }
 
@@ -139,8 +138,25 @@
   overflow-y: auto;
   max-height: calc(90vh - 60px);
   color: var(--color-text-primary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
+}
+
+.base-modal-content::-webkit-scrollbar {
+  width: 8px;
+}
+
+.base-modal-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.base-modal-content::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-accent) 40%, transparent);
+  border-radius: 4px;
+}
+
+.base-modal-content::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--color-accent) 55%, transparent);
 }
 
 /* Custom pricing modal styles */
@@ -195,7 +211,7 @@
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 13px;
-  font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Roboto Mono', Consolas, 'Courier New', monospace;
+  font-family: var(--font-mono);
   color: #E8E3D3;
   min-width: auto;
   display: inline-block;
@@ -244,7 +260,7 @@
   color: rgba(232, 227, 211, 0.6);
   font-size: 15px;
   margin: 0 0 24px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
   letter-spacing: -0.016em;
 }
@@ -274,8 +290,8 @@
 }
 
 .example-card.selected {
-  background: rgba(184, 149, 110, 0.1);
-  border-color: rgba(184, 149, 110, 0.3);
+  background: rgba(217, 119, 87, 0.1);
+  border-color: rgba(217, 119, 87, 0.3);
 }
 
 .example-content {
@@ -291,7 +307,7 @@
   font-size: 17px;
   font-weight: 600;
   margin: 0 0 8px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.022em;
 }
 
@@ -300,7 +316,7 @@
   font-size: 14px;
   margin: 0;
   line-height: 1.5;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .use-template-button {
@@ -312,7 +328,7 @@
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.01em;
   transition: all 0.15s ease;
 }
@@ -326,7 +342,7 @@
   color: rgba(232, 227, 211, 0.7);
   font-size: 18px;
   margin: 0 0 32px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.5;
   text-align: center;
 }
@@ -368,7 +384,7 @@
   border-radius: 12px;
   font-size: 13px;
   font-weight: 600;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.016em;
 }
 
@@ -382,7 +398,7 @@
   font-size: 20px;
   font-weight: 600;
   margin: 0 0 8px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.016em;
 }
 
@@ -398,7 +414,7 @@
   font-size: 36px;
   font-weight: 700;
   color: #E8E3D3;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.028em;
 }
 
@@ -414,7 +430,7 @@
   color: rgba(232, 227, 211, 0.7);
   font-size: 15px;
   margin-bottom: 24px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.4;
 }
 
@@ -429,7 +445,7 @@
   font-size: 15px;
   margin-bottom: 12px;
   padding-left: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   line-height: 1.4;
 }
 
@@ -444,7 +460,7 @@
   font-size: 16px;
   font-weight: 590;
   cursor: pointer;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.016em;
   transition: all 0.15s ease-out;
   border: none;
@@ -504,7 +520,7 @@
   color: rgba(232, 227, 211, 0.8);
   font-size: 15px;
   line-height: 1.5;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .guarantee-text strong {
@@ -517,7 +533,7 @@
   font-size: 20px;
   font-weight: 600;
   margin: 0 0 24px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.016em;
   text-align: center;
 }
@@ -540,7 +556,7 @@
   font-size: 16px;
   font-weight: 600;
   margin: 0 0 8px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.016em;
 }
 
@@ -549,7 +565,7 @@
   font-size: 14px;
   margin: 0;
   line-height: 1.5;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 /* Mobile responsive */

@@ -29,9 +29,8 @@ lerna-debug.log*
 .DS_Store
 Thumbs.db
 
-# Lock files (use your preferred package manager)
+# Bun is the package manager for this workspace.
 package-lock.json
-bun.lock
 
 # Test artifacts
 coverage
@@ -50,5 +49,13 @@ docs/
 
 # Development files
 public/doc.pdf
+
+# Large runtime assets (perl scripts + webperl/tex_fmt wasm) — delivered separately, not via git
+app/public/core/
 *.md
 !README.md
+
+# Private local source/runtime snapshots
+.local-release/
+
+!RELEASE_NOTES.md

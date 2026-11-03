@@ -1,26 +1,29 @@
 /**
  * CompilerService - LaTeX compilation using BusyTeX
  *
- * Wraps the busytex-lazy BusyTeXCompiler to provide
+ * Wraps siglum-engine's SiglumCompiler to provide
  * in-browser LaTeX → PDF compilation.
  */
 
-import { BusyTeXCompiler, detectEngine } from 'busytex-lazy';
+import { SiglumCompiler, detectEngine } from '@siglum/engine';
+
+// Worker is copied from @siglum/engine to public/ by postinstall script
+import WORKER_URL from '@siglum/engine/worker?url';
 
 // API endpoint for bundles and WASM
 // In development, use local server (serve-local.ts in siglum-engine)
-const API_BASE = import.meta.env.DEV
-  ? 'http://localhost:8787'
-  : 'https://siglum-api.vtp-ips.workers.dev';
+const API_BASE = import.meta.env.VITE_API_BASE
+  || (import.meta.env.DEV ? new URL('/engine', window.location.origin).href : 'https://packages.siglum.org');
+const RELEASE_ID = import.meta.env.VITE_ENGINE_RELEASE;
+const ASSET_BASE = RELEASE_ID ? `${API_BASE}/releases/${RELEASE_ID}` : API_BASE;
 
-// Workers must be same-origin - serve from /worker.js in public folder
-const WORKER_URL = '/worker.js';
 
 export type CompileStatus = 'idle' | 'initializing' | 'compiling' | 'success' | 'error';
 
 export interface CompileResult {
   success: boolean;
   pdf?: Uint8Array;
+  syncTexData?: string;
   error?: string;
   log?: string;
   cached?: boolean;
@@ -46,8 +49,16 @@ const DEFAULT_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 // Shorter timeout when tab is hidden (30 seconds)
 const HIDDEN_TAB_TIMEOUT_MS = 30 * 1000;
 
+// Memory-aware hot-swap: trigger based on cumulative WASM heap allocation.
+// V8 doesn't GC WebAssembly.Memory even after Module is destroyed, so each compile's
+// ~143MB WASM heap leaks until the worker is terminated. We sum reported WASM sizes
+// across compiles to estimate total leaked memory and swap when it exceeds this threshold.
+const MEMORY_THRESHOLD_BYTES = 800 * 1024 * 1024; // 800MB cumulative
+// Hard ceiling fallback if memory reporting fails (wasmHeapBytes always 0)
+const MAX_COMPILES_FALLBACK = 5;
+
 class CompilerService {
-  private compiler: BusyTeXCompiler | null = null;
+  private compiler: SiglumCompiler | null = null;
   private initPromise: Promise<void> | null = null;
   private statusCallbacks: Set<StatusCallback> = new Set();
   private logCallbacks: Set<LogCallback> = new Set();
@@ -59,6 +70,10 @@ class CompilerService {
   private idleTimeoutMs = DEFAULT_IDLE_TIMEOUT_MS;
   private visibilityHandler: (() => void) | null = null;
   private isTabHidden = false;
+  private compileCount = 0;
+  private cumulativeWasmBytes = 0;
+  private pendingSwap: Promise<void> | null = null;
+  private swapInProgress = false;
 
   constructor() {
     this.setupVisibilityListener();
@@ -116,6 +131,10 @@ class CompilerService {
   }
 
   private log(message: string) {
+    // Log memory-related messages to console for debugging
+    if (message.includes('[MEMORY]')) {
+      console.log(message);
+    }
     this.logCallbacks.forEach(cb => cb(message));
   }
 
@@ -123,11 +142,12 @@ class CompilerService {
    * Initialize the compiler (lazy - only called when needed)
    */
   async initialize(): Promise<void> {
-    if (this.compiler) return;
     if (this.initPromise) return this.initPromise;
-
-    this.initPromise = this._initialize();
-    return this.initPromise;
+    if (this.compiler) return;
+    const initialization = this._initialize();
+    this.initPromise = initialization;
+    try { await initialization; }
+    finally { if (this.initPromise === initialization) this.initPromise = null; }
   }
 
   private async _initialize(): Promise<void> {
@@ -135,15 +155,16 @@ class CompilerService {
     this.setStatus('initializing', 'Loading compiler...');
 
     try {
-      this.compiler = new BusyTeXCompiler({
-        bundlesUrl: `${API_BASE}/bundles`,
-        wasmUrl: `${API_BASE}/wasm/busytex.wasm`,
+      this.compiler = new SiglumCompiler({
+        bundlesUrl: `${ASSET_BASE}/bundles`,
+        wasmUrl: `${ASSET_BASE}/wasm/busytex.wasm`,
         workerUrl: WORKER_URL,
-        ctanProxyUrl: API_BASE,
-        xzwasmUrl: import.meta.env.DEV ? '/src/xzwasm.js' : `${API_BASE}/xzwasm.js`,
+        ctanProxyUrl: ASSET_BASE,
+        xzwasmUrl: `${ASSET_BASE}/xzwasm.js`,
         enableCtan: true,
         enableLazyFS: true,
         enableDocCache: false, // Disabled - causes detached ArrayBuffer errors on doc switch
+        eagerBundles: { pdflatex: ['cm-super'] }, // Pre-load cm-super fonts to avoid retry loop
         onLog: (msg: string) => this.log(msg),
         onProgress: (stage: string, detail?: string) => {
           // Only set 'initializing' status during actual initialization
@@ -159,6 +180,8 @@ class CompilerService {
       this.setStatus('idle');
       this.log('Compiler ready');
     } catch (error) {
+      this.compiler?.terminate();
+      this.compiler = null;
       this.isInitializing = false;
       this.setStatus('error', (error as Error).message);
       throw error;
@@ -168,25 +191,19 @@ class CompilerService {
   /**
    * Compile LaTeX source to PDF
    */
-  async compile(source: string, options: { engine?: 'pdflatex' | 'xelatex' | 'auto' } = {}): Promise<CompileResult> {
-    // Wait for any existing compilation to finish to prevent concurrent WASM access
-    if (this.compilePromise) {
-      this.log('Waiting for previous compilation to finish...');
-      try {
-        await this.compilePromise;
-      } catch {
-        // Ignore errors from previous compile
-      }
-    }
-
-    // Start new compilation
-    this.compilePromise = this._compile(source, options);
-    const result = await this.compilePromise;
-    this.compilePromise = null;
-    return result;
+  async compile(source: string, options: { engine?: 'pdflatex' | 'xelatex' | 'auto'; additionalFiles?: Record<string, string | Uint8Array>; mainFile?: string } = {}): Promise<CompileResult> {
+    const previous = this.compilePromise;
+    const task = (async () => {
+      if (previous) { try { await previous; } catch { /* next request may recover */ } }
+      if (this.pendingSwap) await this.pendingSwap;
+      return this._compile(source, options);
+    })();
+    this.compilePromise = task;
+    try { return await task; }
+    finally { if (this.compilePromise === task) this.compilePromise = null; }
   }
 
-  private async _compile(source: string, options: { engine?: 'pdflatex' | 'xelatex' | 'auto' } = {}): Promise<CompileResult> {
+  private async _compile(source: string, options: { engine?: 'pdflatex' | 'xelatex' | 'auto'; additionalFiles?: Record<string, string | Uint8Array>; mainFile?: string } = {}): Promise<CompileResult> {
     const startTime = performance.now();
 
     try {
@@ -204,16 +221,65 @@ class CompilerService {
         ? detectEngine(source)
         : options.engine;
 
-      const result = await this.compiler.compile(source, { engine });
+      const result = await this.compiler.compile(source, { engine, additionalFiles: options.additionalFiles, mainFile: options.mainFile });
       // Use the actual TeX compile time from the worker, not the round-trip time
       const stats = result.stats as { compileTimeMs?: number } | undefined;
-      const timeMs = stats?.compileTimeMs ?? (performance.now() - startTime);
+      const roundTrip = performance.now() - startTime;
+      const workerTime = stats?.compileTimeMs;
+      const timeMs = workerTime ?? roundTrip;
+      console.log(`[Compile] worker: ${workerTime?.toFixed(0) ?? 'N/A'}ms, roundTrip: ${roundTrip.toFixed(0)}ms, displayed: ${timeMs.toFixed(0)}ms`);
+
+      // Track memory for hot-swap decisions regardless of compile success/failure.
+      // Failed compiles still allocate a WASM Module and leak its memory.
+      this.compileCount++;
+      const mem = (result.stats as { memory?: { wasmHeapBytes?: number; jsHeapUsedBytes?: number | null } })?.memory;
+      if (mem?.wasmHeapBytes) {
+        this.cumulativeWasmBytes += mem.wasmHeapBytes;
+      }
+      const cumMB = (this.cumulativeWasmBytes / 1024 / 1024).toFixed(0);
+      const wasmMB = mem?.wasmHeapBytes ? (mem.wasmHeapBytes / 1024 / 1024).toFixed(0) : '?';
+      const jsMB = mem?.jsHeapUsedBytes ? (mem.jsHeapUsedBytes / 1024 / 1024).toFixed(0) : 'N/A';
+      this.log(`[MEMORY] Compile #${this.compileCount}: WASM=${wasmMB}MB (cumulative ${cumMB}MB), JS heap=${jsMB}MB`);
+
+      let shouldSwap = false;
+      let reason = '';
+
+      // Primary: cumulative WASM memory exceeds threshold.
+      // Each compile creates a fresh Module (~143MB), but V8 doesn't GC the old
+      // WebAssembly.Memory backing stores, so total leaked memory = sum of all compiles.
+      if (this.cumulativeWasmBytes >= MEMORY_THRESHOLD_BYTES) {
+        shouldSwap = true;
+        reason = `cumulative WASM ${cumMB}MB >= ${MEMORY_THRESHOLD_BYTES / 1024 / 1024}MB`;
+      }
+      // Fallback: hard compile count ceiling (memory reporting may have failed)
+      if (!shouldSwap && this.compileCount >= MAX_COMPILES_FALLBACK) {
+        shouldSwap = true;
+        reason = `compile count ${this.compileCount} (fallback)`;
+      }
+
+      if (shouldSwap) {
+        this.log(`[MEMORY] Hot-swap triggered: ${reason}`);
+        this.compileCount = 0;
+        this.cumulativeWasmBytes = 0;
+        this.pendingSwap = this.hotSwapWorker();
+        this.pendingSwap.finally(() => { this.pendingSwap = null; });
+      }
 
       if (result.success) {
         this.setStatus('success');
+        // Clear bundle memory cache to reduce main thread memory usage.
+        // Bundles are still cached on disk and will reload quickly.
+        // Guard: this optimization must never discard a successful compile's PDF.
+        try {
+          this.compiler.clearBundleMemoryCache?.();
+        } catch (e) {
+          this.log('clearBundleMemoryCache failed (non-fatal): ' + (e as Error).message);
+        }
+
         return {
           success: true,
           pdf: result.pdf,
+          syncTexData: result.syncTexData ?? undefined,
           cached: result.cached,
           log: result.log,
           timeMs,
@@ -230,6 +296,7 @@ class CompilerService {
     } catch (error) {
       const timeMs = performance.now() - startTime;
       this.setStatus('error', (error as Error).message);
+      this.log('Compile error: ' + (error as Error).message);
       return {
         success: false,
         error: (error as Error).message,
@@ -250,6 +317,10 @@ class CompilerService {
    * Clear all caches
    */
   async clearCache(): Promise<void> {
+    // Wait for any pending hot-swap to complete
+    if (this.pendingSwap) {
+      await this.pendingSwap;
+    }
     if (this.compiler) {
       await this.compiler.clearCache();
       this.log('Cache cleared');
@@ -260,6 +331,10 @@ class CompilerService {
    * Generate a format file (pre-compiled preamble) for faster subsequent compiles
    */
   async generateFormat(source: string, options: { engine?: 'pdflatex' | 'xelatex' | 'auto' } = {}): Promise<boolean> {
+    // Wait for any pending hot-swap to complete
+    if (this.pendingSwap) {
+      await this.pendingSwap;
+    }
     try {
       await this.initialize();
 
@@ -311,7 +386,7 @@ class CompilerService {
 
   /**
    * Unload compiler to free memory (~500-800MB)
-   * Disk caches (OPFS/IndexedDB) are preserved for offline use.
+   * Disk caches are preserved for offline use.
    */
   unload(): void {
     this.clearIdleTimer();
@@ -331,6 +406,82 @@ class CompilerService {
       } else {
         this.log('Compiler unloaded to free memory');
       }
+    }
+  }
+
+  /**
+   * Hot-swap the compiler to free WASM memory without user-visible delay.
+   * Creates new instance, waits for ready, then atomically swaps.
+   */
+  private async hotSwapWorker(): Promise<void> {
+    // Prevent concurrent swaps
+    if (this.swapInProgress || !this.compiler) {
+      return;
+    }
+
+    // Don't swap during active compilation
+    if (this.currentStatus === 'compiling' || this.currentStatus === 'initializing') {
+      return;
+    }
+
+    this.swapInProgress = true;
+
+    // Capture old compiler BEFORE any async operations
+    const oldCompiler = this.compiler;
+
+    this.log('[MEMORY] Hot-swap: creating new compiler instance');
+
+    // Track new compiler for cleanup on failure
+    let newCompiler: SiglumCompiler | null = null;
+
+    try {
+      const startTime = performance.now();
+
+      // Create new compiler with same configuration
+      newCompiler = new SiglumCompiler({
+        bundlesUrl: `${ASSET_BASE}/bundles`,
+        wasmUrl: `${ASSET_BASE}/wasm/busytex.wasm`,
+        workerUrl: WORKER_URL,
+        ctanProxyUrl: ASSET_BASE,
+        xzwasmUrl: `${ASSET_BASE}/xzwasm.js`,
+        enableCtan: true,
+        enableLazyFS: true,
+        enableDocCache: false,
+        eagerBundles: { pdflatex: ['cm-super'] },
+        onLog: (msg: string) => this.log(msg),
+        onProgress: () => {}, // Silent during background swap
+      });
+
+      // Start init (but don't await yet)
+      const initPromise = newCompiler.init();
+
+      // Immediately unload old compiler to minimize memory overlap
+      // This is safe because compile() waits for pendingSwap before proceeding
+      // Memory optimization: reduces peak from 2x to ~1.2x during swap
+      this.compiler = null;
+      this.initPromise = null;
+      oldCompiler.unload();
+      this.log('[MEMORY] Hot-swap: old compiler terminated, waiting for new');
+
+      // Now wait for new compiler to be ready
+      await initPromise;
+
+      const elapsed = (performance.now() - startTime).toFixed(0);
+      this.log(`[MEMORY] Hot-swap: new compiler ready in ${elapsed}ms`);
+
+      // Assign new compiler
+      this.compiler = newCompiler;
+      newCompiler = null; // Prevent cleanup in catch
+
+    } catch (error) {
+      this.log(`[MEMORY] Hot-swap failed: ${(error as Error).message}`);
+      // Clean up partially initialized compiler to prevent memory leak
+      if (newCompiler) {
+        try { newCompiler.unload(); } catch { /* ignore cleanup errors */ }
+      }
+      // this.compiler is already null; next compile() will trigger full re-init via initialize()
+    } finally {
+      this.swapInProgress = false;
     }
   }
 
@@ -384,4 +535,13 @@ class CompilerService {
   }
 }
 
-export default new CompilerService();
+const compilerService = new CompilerService();
+
+// HMR cleanup: terminate old worker when module is hot-reloaded
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => {
+    compilerService.unload();
+  });
+}
+
+export default compilerService;

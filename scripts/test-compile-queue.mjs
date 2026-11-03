@@ -1,0 +1,5 @@
+import {createRequire} from 'node:module';
+const require=createRequire(new URL('../app/package.json',import.meta.url));
+const {chromium}=createRequire(require.resolve('@siglum/engine'))('playwright');
+import assert from 'node:assert/strict';
+const browser=await chromium.launch({headless:true});try{const page=await browser.newPage();await page.goto('http://127.0.0.1:5174/');const result=await page.evaluate(async()=>{const{default:s}=await import('/src/services/CompilerService.ts');const ready=s.initialize();const jobs=['FIRST','SECOND','THIRD'].map(marker=>s.compile('\\documentclass{article}\n\\begin{document}\n'+marker+'\\typeout{'+marker+'-TYPESET}\n\\end{document}'));const results=await Promise.all(jobs);await ready;return results.map((r,i)=>({success:r.success,expected:['FIRST','SECOND','THIRD'][i]+'-TYPESET',log:r.log,pdfBytes:r.pdf?.length,error:r.error}))});for(const r of result){assert.equal(r.success,true,r.error);assert.ok(r.log.includes(r.expected));assert.ok(r.pdfBytes>1000)}console.log('PASS simultaneous initialization and three queued compiles with distinct PDFs')}finally{await browser.close()}

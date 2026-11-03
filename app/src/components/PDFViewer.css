@@ -1,26 +1,48 @@
 .pdf-viewer {
   width: 100%;
   height: 100%;
-  background: var(--color-base);
+  background: rgba(16, 14, 12, 0.6);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(232, 227, 211, 0.03);
   position: relative;
   overflow: hidden;
-  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  outline: none;
+  /* Prevent horizontal overscroll from triggering browser back/forward navigation */
+  overscroll-behavior-x: contain;
+}
+
+.pdf-viewer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  pointer-events: none;
 }
 
 .pdf-document {
   width: 100%;
   height: calc(100% - 32px);
   margin-top: 32px;
-  display: flex;
-  justify-content: center;
-  align-items: flex-start;
-  padding: 24px;
-  overflow: auto;
+  padding: 16px 12px 24px 12px;
+  /* Apple-style: no scroll, all positioning via transform */
+  overflow: hidden;
   box-sizing: border-box;
   position: relative;
   z-index: 1;
   background: transparent;
-  container-type: inline-size;
+  /* Prevent all browser gestures - we handle everything */
+  touch-action: none;
+  /* Prevent text selection during gestures */
+  user-select: none;
+  -webkit-user-select: none;
+  /* Prevent horizontal overscroll from triggering browser back/forward navigation */
+  overscroll-behavior: contain;
 }
 
 @media (min-width: 1200px) {
@@ -30,16 +52,34 @@
 }
 
 .pdf-page-wrapper {
-  position: relative;
-  margin: 0 auto;
-  display: inline-block;
+  /* Apple-style: absolute positioning, all movement via transform */
+  position: absolute;
+  top: 0;
+  left: 0;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.4),
     0 6px 16px rgba(0, 0, 0, 0.25);
-  overflow: hidden;
   line-height: 0;
-  background: #2a2520;
-  max-width: 100%;
+  background: rgba(30, 27, 22, 0.9);
+  border-radius: 3px;
+  overflow: hidden;
+  /* Visible edge when zoomed in — thin border around document */
+  border: 1px solid rgba(232, 227, 211, 0.04);
+  /* Transform origin at top-left for predictable math */
+  transform-origin: 0 0;
+  /* Enable GPU acceleration */
+  will-change: transform;
+  /* Fade in on first render */
+  animation: pdfFadeIn 0.2s ease-out;
+}
+
+@keyframes pdfFadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 .pdf-viewer.pdf-dark-mode .pdf-page-wrapper {
@@ -53,29 +93,7 @@
 }
 
 .pdf-page-filter.dark {
-  animation: toDark 0.5s ease forwards;
-}
-
-.pdf-page-filter.light {
-  animation: toLight 0.5s ease forwards;
-}
-
-@keyframes toDark {
-  from {
-    filter: sepia(0.12) brightness(0.93);
-  }
-  to {
-    filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
-  }
-}
-
-@keyframes toLight {
-  from {
-    filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
-  }
-  to {
-    filter: sepia(0.12) brightness(0.93);
-  }
+  filter: invert(0.85) sepia(0.2) brightness(0.95) hue-rotate(-10deg);
 }
 
 .pdf-page-canvas {
@@ -103,20 +121,20 @@
 }
 
 .pdf-text-layer span::selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-text-layer span::-moz-selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 /* Dark mode text selection */
 .pdf-viewer.pdf-dark-mode .pdf-text-layer ::selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-viewer.pdf-dark-mode .pdf-text-layer ::-moz-selection {
-  background: rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.4);
 }
 
 .pdf-loading,
@@ -131,7 +149,7 @@
   color: var(--color-text-tertiary);
   font-size: 15px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   letter-spacing: -0.01em;
 }
 
@@ -144,8 +162,8 @@
   border: none;
   border-radius: 8px;
   cursor: pointer;
-  transition: all 0.15s ease;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  transition: background 0.15s ease, transform 0.15s ease;
+  font-family: var(--font-body);
 }
 
 .pdf-compile-button:hover:not(:disabled) {
@@ -171,7 +189,7 @@
   font-size: 11px;
   font-weight: 500;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   user-select: none;
   padding: 0 6px;
   white-space: nowrap;
@@ -182,14 +200,14 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   user-select: none;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
   background: transparent;
   border: none;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .zoom-level:hover {
@@ -204,8 +222,6 @@
   left: 50%;
   transform: translateX(-50%);
   background: var(--color-base-lighter);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 6px;
@@ -235,10 +251,10 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 14px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   text-align: left;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .zoom-preset:hover {
@@ -267,8 +283,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  background: var(--color-base-darker);
-  border-bottom: 1px solid var(--color-border);
+  background: rgba(20, 17, 14, 0.5);
+  border-bottom: 1px solid rgba(232, 227, 211, 0.08);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.3);
   padding: 0 12px;
   z-index: 10;
 }
@@ -318,13 +335,20 @@
   border-radius: 4px;
   color: var(--color-text-tertiary);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.15s ease;
   padding: 0;
+  touch-action: manipulation;
+}
+
+.control-button:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
 }
 
 .control-button:hover:not(:disabled) {
   background: rgba(232, 227, 211, 0.1);
   color: var(--color-text-primary);
+  transform: translateY(-0.5px);
 }
 
 .control-button:disabled {
@@ -351,14 +375,19 @@
   border: 1px solid var(--color-border);
   border-radius: 4px;
   padding: 4px 8px;
-  font-size: 11px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-size: 16px; /* Prevents iOS zoom on focus */
+  font-family: var(--font-body);
   color: var(--color-text-primary);
   width: 160px;
   height: 24px;
   box-sizing: border-box;
   outline: none;
-  transition: all 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.search-input:focus-visible {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 2px rgba(217, 119, 87, 0.2);
 }
 
 .search-input:focus {
@@ -378,7 +407,7 @@
 .search-count {
   font-size: 10px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
   padding: 0 6px;
   white-space: nowrap;
 }
@@ -399,15 +428,88 @@
   pointer-events: none;
 }
 
+/* Search match highlighting - other matches (subtle gold, matches editor) */
 .search-highlight {
-  background: rgba(255, 200, 0, 0.35);
+  background: rgba(212, 166, 86, 0.2);
   border-radius: 2px;
+  /* No transition on non-active highlights - saves CPU on 100+ elements */
+}
+
+/* Current/active search match - bright orange background (matches editor) */
+.search-highlight.active {
+  background: rgba(255, 120, 0, 0.7);
+  /* Only animate the active highlight */
   transition: background 0.15s ease;
 }
 
-.search-highlight.active {
-  background: rgba(255, 140, 0, 0.6);
-  box-shadow: 0 0 0 2px rgba(255, 140, 0, 0.4);
+/* Search Dropdown (matches editor pattern) */
+.pdf-search-dropdown {
+  position: absolute;
+  top: 32px;
+  right: 12px;
+  height: 32px;
+  background: rgba(26, 22, 20, 0.85);
+  border: 1px solid var(--color-border);
+  border-top: none;
+  border-radius: 0 0 6px 6px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px;
+  z-index: 15;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.pdf-search-input {
+  width: 180px;
+  height: 24px;
+  background: var(--color-base);
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+  padding: 0 8px;
+  font-size: 12px;
+  color: var(--color-text);
+  outline: none;
+}
+
+.pdf-search-input:focus {
+  border-color: var(--color-accent);
+}
+
+.pdf-search-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.pdf-search-count {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  min-width: 60px;
+  text-align: center;
+}
+
+.pdf-search-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+  transition: background 0.15s ease;
+}
+
+.pdf-search-btn:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text);
+}
+
+.pdf-search-btn:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: -2px;
 }
 
 /* Outline/TOC Panel */
@@ -418,8 +520,6 @@
   width: 240px;
   max-height: calc(100% - 60px);
   background: rgba(34, 31, 26, 0.95);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--color-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
@@ -469,7 +569,7 @@
   color: var(--color-text-tertiary);
   font-size: 16px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .pdf-outline-close:hover {
@@ -481,6 +581,8 @@
   flex: 1;
   overflow-y: auto;
   padding: 8px 0;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .pdf-outline-content::-webkit-scrollbar {
@@ -510,7 +612,6 @@
   gap: 6px;
   padding: 8px 12px;
   cursor: pointer;
-  transition: background 0.15s ease;
   min-height: 32px;
 }
 
@@ -588,3 +689,25 @@
     max-height: 50%;
   }
 }
+
+/* SyncTeX highlight band — full-width amber bar that fades out */
+.pdf-sync-indicator {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 16px;
+  margin-top: -8px; /* Center on the Y coordinate */
+  background: rgba(212, 166, 86, 0.35);
+  pointer-events: none;
+  z-index: 1000;
+  border-left: 3px solid rgba(212, 166, 86, 0.8);
+  animation: syncHighlightFade 2s ease-out forwards;
+}
+
+@keyframes syncHighlightFade {
+  0% { opacity: 1; }
+  60% { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+.pdf-retry-button { min-height: 44px; padding: 0 16px; background: #d1ad84; color: #241d14; border: 0; border-radius: 10px; font: inherit; cursor: pointer; }

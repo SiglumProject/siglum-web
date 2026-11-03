@@ -108,9 +108,14 @@ class VirtualFileSystem {
     }
 
     _getBundleFiles(bundleName, manifest, bundleMeta) {
-        const bundleFiles = [];
+        // Use pre-indexed lookup if available (O(1) vs O(n))
+        // Note: Returns cached array reference - callers must not modify!
+        if (filesByBundle?.has(bundleName)) {
+            return filesByBundle.get(bundleName);
+        }
 
-        // Check if bundle files are in the global manifest
+        // Fallback: scan manifest (for dynamically loaded bundles not in index)
+        const bundleFiles = [];
         for (const [path, info] of Object.entries(manifest)) {
             if (info.bundle === bundleName) bundleFiles.push([path, info]);
         }
@@ -138,15 +143,17 @@ class VirtualFileSystem {
         }
         for (const dir of dirs) this._ensureDirectoryPath(dir);
 
-        // Track font files for later pdftex.map rewriting
-        const isFontBundle = bundleName === 'cm-super' || bundleName.startsWith('fonts-');
+        // Detect font bundles dynamically: any bundle containing .pfb, .enc, or font .map files
+        const isFontBundle = bundleFiles.some(([p]) =>
+            p.endsWith('.pfb') || p.endsWith('.enc') || (p.includes('/fonts/map/') && p.endsWith('.map'))
+        );
 
         for (const [path, info] of bundleFiles) {
             if (this.mountedFiles.has(path)) continue;
             if (this.lazyEnabled && !this._shouldEagerLoad(path)) {
                 this.mountLazy(path, bundleName, info.start, info.end, false);
             } else {
-                const content = new Uint8Array(bundleData.slice(info.start, info.end));
+                const content = this._copyFromBundle(bundleData, info.start, info.end);
                 this.mount(path, content, false);
             }
             mounted++;
@@ -157,24 +164,69 @@ class VirtualFileSystem {
                 this.fontFileLocations = this.fontFileLocations || new Map();
                 this.fontFileLocations.set(filename, path);
             }
+            // Track font map files from external font bundles (e.g. cm-super) that
+            // aren't already aggregated into updmap's pdftex.map by the core bundle.
+            // These need to be appended during processFontMaps().
+            if (isFontBundle && bundleName !== 'core'
+                && path.includes('/fonts/map/dvips/') && path.endsWith('.map')) {
+                this.pendingFontMaps.add(path);
+            }
         }
         this.onLog(`Mounted ${mounted} files from bundle ${bundleName}`);
         return mounted;
     }
 
-    mountCtanFiles(files) {
+    mountCtanFiles(files, options = {}) {
+        const { forceOverride = false } = options;
         const filesMap = files instanceof Map ? files : new Map(Object.entries(files));
         let mounted = 0;
+        let overridden = 0;
         for (const [path, content] of filesMap) {
-            if (this.mountedFiles.has(path)) continue;
+            const alreadyMounted = this.mountedFiles.has(path);
+            if (alreadyMounted && !forceOverride) continue;
+
             const data = typeof content === 'string'
                 ? (content.startsWith('base64:') ? this._decodeBase64(content.slice(7)) : new TextEncoder().encode(content))
                 : content;
             this.mount(path, data, true);  // Track font maps for CTAN packages
-            mounted++;
+            this._mirrorCustomFontForFontconfig(path, data);
+
+            if (alreadyMounted) {
+                overridden++;
+            } else {
+                mounted++;
+            }
         }
-        this.onLog(`Mounted ${mounted} CTAN files`);
-        return mounted;
+        if (overridden > 0) {
+            this.onLog(`Mounted ${mounted} CTAN files, overrode ${overridden} bundle files`);
+        } else {
+            this.onLog(`Mounted ${mounted} CTAN files`);
+        }
+        return mounted + overridden;
+    }
+
+    /**
+     * Mirror a user-supplied font into a fontconfig-scanned dir.
+     *
+     * additionalFiles (custom fonts) land at the VFS root, which fontconfig does
+     * not scan (FONTS_CONF only covers the texmf opentype/truetype/type1 trees).
+     * So `\setmainfont{Family Name}` can't find them — only filename/Path-based
+     * references work. We copy any root-level font into the matching texmf font
+     * dir so fontconfig indexes it by its internal name table, exactly like an
+     * installed font. The original path stays put for filename references.
+     */
+    _mirrorCustomFontForFontconfig(path, data) {
+        // CTAN/bundle fonts already live under .../fonts/...; only mirror fonts
+        // that don't (i.e. user files dropped at the VFS root).
+        if (path.includes('/fonts/')) return;
+        const ext = path.toLowerCase().match(/\.(otf|ttf|ttc|pfb)$/);
+        if (!ext) return;
+        const subdir = ext[1] === 'otf' ? 'opentype' : ext[1] === 'pfb' ? 'type1' : 'truetype';
+        const fileName = path.split('/').pop();
+        const dest = `/texlive/texmf-dist/fonts/${subdir}/custom/${fileName}`;
+        if (this.mountedFiles.has(dest)) return;
+        this.mount(dest, data, false);
+        this.onLog(`Custom font ${fileName} mirrored to ${subdir} tree for fontconfig name lookup`);
     }
 
     processFontMaps() {
@@ -278,7 +330,60 @@ class VirtualFileSystem {
         this.processFontMaps();
         this.rewritePdftexMapPaths();
         this.generateLsR();
+        this.writeFontconfig();
         this.onLog(`VFS finalized: ${this.mountedFiles.size} files`);
+    }
+
+    // Write the fontconfig config into /texlive AFTER bundles are mounted there,
+    // so it isn't shadowed by the texmf mount. fontconfig (FONTCONFIG_FILE) reads
+    // this at XeTeX startup; without it the engine falls back to a built-in config
+    // that doesn't point at the texmf font tree, so no font is ever found.
+    writeFontconfig() {
+        try {
+            this.FS.writeFile('/texlive/fonts.conf', FONTS_CONF);
+        } catch (e) {
+            this.onLog(`[fontconfig] failed to write fonts.conf: ${e.message}`);
+        }
+    }
+
+    // Paths produced/modified by finalize(). Their final contents are deterministic
+    // for a given mounted bundle set, so they can be cached and replayed (see 4A).
+    static get PDFTEX_MAP_PATH() {
+        return '/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map';
+    }
+    static get LSR_PATH() {
+        return '/texlive/texmf-dist/ls-R';
+    }
+
+    /**
+     * Snapshot the (JS-heap-owned) bytes of the two files finalize() produces.
+     * Copies out of MEMFS so the result survives the WASM module being destroyed.
+     */
+    captureFinalizeOutput() {
+        const out = { pdftexMap: null, lsR: null };
+        try { out.pdftexMap = new Uint8Array(this.FS.readFile(VirtualFileSystem.PDFTEX_MAP_PATH)); } catch (e) {}
+        try { out.lsR = new Uint8Array(this.FS.readFile(VirtualFileSystem.LSR_PATH)); } catch (e) {}
+        return out;
+    }
+
+    /**
+     * Replay a cached finalize() output instead of recomputing it. This skips
+     * processFontMaps() — ~200ms of deterministic FS.analyzePath font probing —
+     * plus the pdftex.map rewrite and ls-R generation.
+     */
+    applyFinalizeOutput(cached) {
+        // Avoid a later accidental processFontMaps() re-appending to the map.
+        this.pendingFontMaps.clear();
+        if (cached.pdftexMap) {
+            const dir = VirtualFileSystem.PDFTEX_MAP_PATH.substring(0, VirtualFileSystem.PDFTEX_MAP_PATH.lastIndexOf('/'));
+            this._ensureDirectoryPath(dir);
+            this.FS.writeFile(VirtualFileSystem.PDFTEX_MAP_PATH, cached.pdftexMap);
+        }
+        if (cached.lsR) {
+            this.FS.writeFile(VirtualFileSystem.LSR_PATH, cached.lsR);
+        }
+        this.writeFontconfig();
+        this.onLog(`VFS finalized (cached): ${this.mountedFiles.size} files`);
     }
 
     rewritePdftexMapPaths() {
@@ -329,13 +434,27 @@ class VirtualFileSystem {
         return obj && typeof obj === 'object' && obj[this.lazyMarkerSymbol] === true;
     }
 
+    /**
+     * Copy a byte range from bundle data into a new independent Uint8Array.
+     * Must be a copy (not a view) because the result is stored as FSNode.contents
+     * and a view would pin the entire bundle ArrayBuffer in memory.
+     * Handles both ArrayBuffer and Uint8Array (legacy main-thread path).
+     */
+    _copyFromBundle(bundleData, start, end) {
+        if (bundleData instanceof ArrayBuffer) {
+            return new Uint8Array(bundleData.slice(start, end));
+        }
+        // TypedArray — slice() copies into a new buffer
+        return bundleData.slice(start, end);
+    }
+
     resolveLazy(marker) {
         const bundleData = this.bundleCache.get(marker.bundleName);
         if (!bundleData) {
             this.onLog(`ERROR: Bundle not in cache: ${marker.bundleName}`);
             return new Uint8Array(0);
         }
-        return new Uint8Array(bundleData.slice(marker.start, marker.end));
+        return this._copyFromBundle(bundleData, marker.start, marker.end);
     }
 
     /**
@@ -345,20 +464,14 @@ class VirtualFileSystem {
     resolveDeferred(marker) {
         const bundleData = this.bundleCache.get(marker.bundleName);
         if (bundleData) {
-            // Bundle is now loaded - return the actual data
-            this.onLog(`Deferred resolve: ${marker.bundleName} [${marker.start}:${marker.end}] - loaded`);
-            return new Uint8Array(bundleData.slice(marker.start, marker.end));
+            return this._copyFromBundle(bundleData, marker.start, marker.end);
         }
 
         // Check if file was already fetched individually via Range request
         const fileKey = `${marker.bundleName}:${marker.start}:${marker.end}`;
-        this.onLog(`Deferred resolve: checking cache for ${fileKey} (cache size: ${this.fetchedFiles.size})`);
         if (this.fetchedFiles.has(fileKey)) {
-            const data = this.fetchedFiles.get(fileKey);
-            this.onLog(`Deferred resolve: CACHE HIT ${fileKey} (${data.length} bytes)`);
-            return data;
+            return this.fetchedFiles.get(fileKey);
         }
-        this.onLog(`Deferred resolve: CACHE MISS ${fileKey}`);
 
         // Track individual file request for Range-based fetching (avoid duplicates)
         this.pendingDeferredFiles = this.pendingDeferredFiles || [];
@@ -372,7 +485,6 @@ class VirtualFileSystem {
                 end: marker.end,
             });
         }
-        this.onLog(`Deferred resolve: file [${marker.start}:${marker.end}] - requesting Range fetch`);
 
         // Return empty data - this will cause TeX to fail with a file not found error
         // The retry loop will detect this and fetch individual files via Range requests
@@ -381,11 +493,17 @@ class VirtualFileSystem {
 
     /**
      * Store fetched file data for later resolution
+     * Uses LRU-style eviction when cache exceeds max entries
      */
     storeFetchedFile(bundleName, start, end, data) {
         const key = `${bundleName}:${start}:${end}`;
+        // Evict oldest entries if cache is at limit (200 entries max)
+        const maxEntries = 200;
+        while (this.fetchedFiles.size >= maxEntries) {
+            const oldestKey = this.fetchedFiles.keys().next().value;
+            this.fetchedFiles.delete(oldestKey);
+        }
         this.fetchedFiles.set(key, data);
-        this.onLog(`Stored file in cache: ${key} (${data.length} bytes, cache size: ${this.fetchedFiles.size})`);
     }
 
     /**
@@ -438,44 +556,60 @@ class VirtualFileSystem {
     }
 
     patchForLazyLoading() {
-        const vfs = this;
-        const ensureResolved = (node) => {
-            // Fast path: if already a Uint8Array, no resolution needed
-            const contents = node.contents;
-            if (contents instanceof Uint8Array) return;
+        // MEMORY SAFETY: MEMFS is a singleton shared across Module instances.
+        // Closures on stream_ops capture VFS → FS → Module scope → Wasm Memory.
+        // We use an indirection pattern: a mutable holder on MEMFS stores the
+        // current VFS reference. The wrapper closure captures only the holder
+        // (a tiny object), not the VFS itself. destroyModule nulls the holder
+        // to break the retention chain. Each new compile updates the holder.
+        if (!this.MEMFS._lazyVfs) {
+            this.MEMFS._lazyVfs = { vfs: null };
+            const holder = this.MEMFS._lazyVfs;
 
-            if (vfs.isLazyMarker(contents)) {
-                const resolved = vfs.resolveLazy(contents);
-                node.contents = resolved;
-                node.usedBytes = resolved.length;
-            } else if (vfs.isDeferredMarker(contents)) {
-                const resolved = vfs.resolveDeferred(contents);
-                // Always replace marker with resolved data (even if empty)
-                // This is required because MEMFS.read expects node.contents to be a Uint8Array
-                // The bundle tracking happens inside resolveDeferred() before returning empty
-                node.contents = resolved;
-                node.usedBytes = resolved.length;
+            // Inline MEMFS read logic — avoids capturing the original read closure
+            // (which lives in the Emscripten module scope and pins wasmMemory).
+            // This is the standard Emscripten MEMFS.stream_ops.read implementation.
+            const resolve = (node) => {
+                const v = holder.vfs;
+                if (!v) return;
+                const contents = node.contents;
+                if (contents instanceof Uint8Array) return;
+                if (v.isLazyMarker(contents)) {
+                    const resolved = v.resolveLazy(contents);
+                    node.contents = resolved;
+                    node.usedBytes = resolved.length;
+                } else if (v.isDeferredMarker(contents)) {
+                    const resolved = v.resolveDeferred(contents);
+                    node.contents = resolved;
+                    node.usedBytes = resolved.length;
+                }
+            };
+
+            this.MEMFS.stream_ops.read = function(stream, buffer, offset, length, position) {
+                resolve(stream.node);
+                var contents = stream.node.contents;
+                if (position >= stream.node.usedBytes) return 0;
+                var size = Math.min(stream.node.usedBytes - position, length);
+                if (size > 8 && contents.subarray) {
+                    buffer.set(contents.subarray(position, position + size), offset);
+                } else {
+                    for (var i = 0; i < size; i++) buffer[offset + i] = contents[position + i];
+                }
+                return size;
+            };
+
+            if (this.MEMFS.ops_table?.file?.stream?.read) {
+                this.MEMFS.ops_table.file.stream.read = this.MEMFS.stream_ops.read;
             }
-        };
-        const originalRead = this.MEMFS.stream_ops.read;
-        this.MEMFS.stream_ops.read = function(stream, buffer, offset, length, position) {
-            ensureResolved(stream.node);
-            return originalRead.call(this, stream, buffer, offset, length, position);
-        };
-        if (this.MEMFS.ops_table?.file?.stream?.read) {
-            const originalTableRead = this.MEMFS.ops_table.file.stream.read;
-            this.MEMFS.ops_table.file.stream.read = function(stream, buffer, offset, length, position) {
-                ensureResolved(stream.node);
-                return originalTableRead.call(this, stream, buffer, offset, length, position);
-            };
+
+            // mmap delegates to stream_ops.read internally, so our read patch
+            // handles lazy resolution. No need to patch mmap separately.
         }
-        if (this.MEMFS.stream_ops.mmap) {
-            const originalMmap = this.MEMFS.stream_ops.mmap;
-            this.MEMFS.stream_ops.mmap = function(stream, length, position, prot, flags) {
-                ensureResolved(stream.node);
-                return originalMmap.call(this, stream, length, position, prot, flags);
-            };
-        }
+
+        // Update the holder to point to the current VFS instance.
+        // Previous VFS becomes unreachable → old FS → old Module scope can be GC'd.
+        this.MEMFS._lazyVfs.vfs = this;
+
         this.lazyEnabled = true;
         this.onLog('VFS: Lazy loading enabled');
     }
@@ -535,6 +669,8 @@ function configureTexEnvironment(ENV) {
     ENV['TEXMFAUXTREES'] = '';
     ENV['TEXMF'] = '/texlive/texmf-dist';
     ENV['TEXMFDOTDIR'] = '.';
+    ENV['BIBINPUTS'] = '.:/texlive/texmf-dist/bibtex/bib//:';
+    ENV['BSTINPUTS'] = '.:/texlive/texmf-dist/bibtex/bst//:';
     ENV['TEXINPUTS'] = '.:/texlive/texmf-dist/tex/latex//:/texlive/texmf-dist/tex/generic//:/texlive/texmf-dist/tex//:';
     ENV['T1FONTS'] = '.:/texlive/texmf-dist/fonts/type1//';
     ENV['ENCFONTS'] = '.:/texlive/texmf-dist/fonts/enc//';
@@ -542,7 +678,38 @@ function configureTexEnvironment(ENV) {
     ENV['VFFONTS'] = '.:/texlive/texmf-dist/fonts/vf//';
     ENV['TEXFONTMAPS'] = '.:/texlive/texmf-dist/fonts/map/dvips//:/texlive/texmf-dist/fonts/map/pdftex//:/texlive/texmf-dist/texmf-var/fonts/map//';
     ENV['TEXPSHEADERS'] = '.:/texlive/texmf-dist/dvips//:/texlive/texmf-dist/fonts/enc//:/texlive/texmf-dist/fonts/type1//:/texlive/texmf-dist/fonts/type42//';
+
+    // fontconfig: XeTeX/LuaTeX resolve fonts requested by name (\setmainfont{...})
+    // through fontconfig. Without a config it aborts during font-DB init
+    // ("Cannot load default config file"). FONTCONFIG_PATH is the directory
+    // holding fonts.conf (written into the VFS by setupFontconfig).
+    ENV['FONTCONFIG_PATH'] = '/texlive';
+    ENV['FONTCONFIG_FILE'] = '/texlive/fonts.conf';
+
+    // Reproducible PDF output: pin the timestamp pdfTeX/xdvipdfmx embed in the PDF
+    // /CreationDate, /ModDate and /ID so identical input yields byte-identical output.
+    // This enables safe output caching and stable hashing. We deliberately do NOT set
+    // FORCE_SOURCE_DATE, so \today / \year still reflect the real date in the document.
+    ENV['SOURCE_DATE_EPOCH'] = '1577836800'; // 2020-01-01T00:00:00Z — fixed reference
 }
+
+// fontconfig config written into the VFS. <dir> entries point at the texmf font
+// tree (only fetched/bundled fonts are ever present, so the runtime scan is
+// naturally bounded). fontconfig scans these dirs and matches a requested family
+// name to a mounted file by reading each font's name table — the authoritative
+// name→file resolution, mirroring a native install. No <cachedir> is set: the
+// VFS is recreated per compile, so a cache could not persist anyway, and the
+// engine's built-in fallback config (used if this file is absent) does not point
+// at the texmf tree, which is why writing this post-mount is essential.
+const FONTS_CONF = `<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+  <dir>/texlive/texmf-dist/fonts/opentype</dir>
+  <dir>/texlive/texmf-dist/fonts/truetype</dir>
+  <dir>/texlive/texmf-dist/fonts/type1</dir>
+</fontconfig>
+`;
+
 
 // ============ Worker Code ============
 
@@ -555,17 +722,166 @@ let fileManifest = null;
 let packageMap = null;
 let bundleDeps = null;
 let bundleRegistry = null;
+let verboseLogging = false; // When false, skip TeX stdout logging for performance
 
-// Global Module instance - reused across compilations to avoid memory leaks
-// Each initBusyTeX call creates a 512MB WASM heap; we want only ONE
+// Pre-indexed manifest: bundleName → [[path, info], ...]
+// Allows O(1) lookup instead of O(n) scan per mountBundle call
+let filesByBundle = null;
+
+// Font file index: basename (e.g., "lmbx12.pfb") → bundle name
+// Enables dynamic font bundle resolution for any font in any bundle
+let fontFileToBundle = null;
+
+// Document-file index: basename (e.g., "pdftex.def") → bundle name.
+// Authoritative for routing a missing .sty/.cls/.def/etc. to the bundle that
+// actually ships it. Needed because getPackageFromFile() only strips the
+// extension to guess a package name, which is wrong for files whose basename
+// differs from their package (e.g. pdftex.def lives in package graphics-def,
+// bundle "graphics", not package "pdftex").
+let docFileToBundle = null;
+const DOC_FILE_EXT = /\.(sty|cls|def|clo|fd|cfg|ldf)$/;
+
+/**
+ * Index manifest by bundle name for fast lookup.
+ * Also builds font file index for dynamic font resolution.
+ * Called once at worker init.
+ */
+function ensureManifestIndexed(manifest) {
+    if (filesByBundle || !manifest) return;
+
+    filesByBundle = new Map();
+    fontFileToBundle = new Map();
+    docFileToBundle = new Map();
+
+    for (const [path, info] of Object.entries(manifest)) {
+        const bundle = info.bundle;
+        if (!bundle) continue;
+        if (!filesByBundle.has(bundle)) {
+            filesByBundle.set(bundle, []);
+        }
+        filesByBundle.get(bundle).push([path, info]);
+
+        const basename = path.substring(path.lastIndexOf('/') + 1);
+        // Index font files by basename for dynamic lookup
+        if (path.endsWith('.pfb') || path.endsWith('.tfm')) {
+            // Only store first occurrence (some fonts may be in multiple bundles)
+            if (!fontFileToBundle.has(basename)) {
+                fontFileToBundle.set(basename, bundle);
+            }
+        } else if (DOC_FILE_EXT.test(basename)) {
+            // Index .sty/.cls/.def/etc. by basename so a missing file routes to
+            // the bundle that actually ships it (first occurrence wins).
+            if (!docFileToBundle.has(basename)) {
+                docFileToBundle.set(basename, bundle);
+            }
+        }
+    }
+    workerLog(`Indexed manifest: ${filesByBundle.size} bundles, ${fontFileToBundle.size} font files, ${docFileToBundle.size} doc files`);
+}
+
+// Note: SharedArrayBuffer intentionally NOT used - causes memory leaks in V8
+// (SABs become "strong roots" that persist even after worker termination)
+
+// Global Module instance - track for cleanup before creating new one
 let globalModule = null;
 let globalModulePromise = null;
+// Track whether the current globalModule has been used for a compile.
+// When false, getOrCreateModule() reuses it instead of destroying+recreating.
+// This allows eager pre-instantiation during init to speed up the first compile.
+let globalModuleUsed = false;
+
+/**
+ * Properly destroy an Emscripten Module to free WASM memory.
+ * Must be called before creating a new Module to prevent memory accumulation.
+ *
+ * @param {Object} module - The Emscripten Module to destroy
+ */
+function destroyModule(module) {
+    if (!module) return;
+
+    self.postMessage({ type: 'log', message: '[MEMORY] destroyModule called' });
+
+    // 1. Terminate any pthread workers (prevents GC blocking)
+    if (module.PThread) {
+        try { module.PThread.terminateAllThreads(); } catch (e) {}
+    }
+
+    // 2. Clear the filesystem to release file data from memory
+    // Must happen BEFORE nulling MEMFS stream_ops (unmount needs them)
+    if (module.FS) {
+        try {
+            const root = module.FS.root;
+            if (root && root.mount && root.mount.mounts) {
+                for (const mount of [...root.mount.mounts]) {
+                    try { module.FS.unmount(mount.mountpoint); } catch (e) {}
+                }
+            }
+        } catch (e) {}
+    }
+
+    // 3. Null the lazy VFS holder to break the closure chain:
+    //    stream_ops.read closure → holder.vfs → old VFS → old FS → old Module scope → Wasm Memory
+    // The wrapper closure remains on stream_ops (it only captures the holder object,
+    // not the VFS directly), so stream_ops.read stays functional for the next Module.
+    try {
+        const memfs = module.FS?.filesystems?.MEMFS;
+        if (memfs?._lazyVfs) {
+            memfs._lazyVfs.vfs = null;
+        }
+    } catch (e) {}
+
+    // 4. Null out HEAP typed array views — these reference the Wasm Memory buffer
+    // and keep it alive even after the Module object is otherwise unreachable.
+    // Explicit list ensures non-enumerable Emscripten internals are covered.
+    const heapKeys = ['HEAPU8', 'HEAPU16', 'HEAPU32', 'HEAP8', 'HEAP16', 'HEAP32',
+                      'HEAPF32', 'HEAPF64', 'buffer', 'wasmMemory', 'wasmExports', 'asm'];
+    for (const key of heapKeys) {
+        try { module[key] = null; } catch (e) {}
+    }
+
+    // 5. Delete ALL remaining properties to break reference chains
+    for (const key of Object.keys(module)) {
+        try {
+            module[key] = null;
+            delete module[key];
+        } catch (e) {}
+    }
+
+    // 6. Clear prototype chain references
+    try { Object.setPrototypeOf(module, null); } catch (e) {}
+
+    self.postMessage({ type: 'log', message: '[MEMORY] Module destroyed successfully' });
+}
 
 // Pending requests
 const pendingCtanRequests = new Map();
 const pendingBundleRequests = new Map();
 const pendingFileRangeRequests = new Map();
-const globalFetchedFilesCache = new Map();  // Persist Range-fetched files across compiles
+
+// Global cache for Range-fetched files (persists across compiles)
+const globalFetchedFilesCache = new Map();
+
+// Caches finalize() output (pdftex.map + ls-R bytes) keyed by the mounted-bundle
+// signature. finalize()'s processFontMaps() does ~200ms of FS.analyzePath font
+// probing that is fully deterministic for a given bundle set, so we compute it once
+// and replay the bytes on warm recompiles (4A). Cleared on hot-swap / cache clear.
+const globalFinalizeCache = new Map();
+
+/**
+ * Finalize a VFS, using the deterministic-output cache when a signature is given.
+ * On a cache hit we skip the heavy font-map processing entirely; on a miss we run
+ * the real finalize() and store its output for next time.
+ */
+function finalizeVfsCached(vfs, signature) {
+    if (signature && globalFinalizeCache.has(signature)) {
+        vfs.applyFinalizeOutput(globalFinalizeCache.get(signature));
+        return;
+    }
+    vfs.finalize();
+    if (signature) {
+        globalFinalizeCache.set(signature, vfs.captureFinalizeOutput());
+    }
+}
 
 // Operation queue to serialize compile and format-generate operations
 // (async onmessage doesn't block new messages from being processed concurrently)
@@ -579,17 +895,198 @@ function workerProgress(stage, detail) {
     self.postMessage({ type: 'progress', stage, detail });
 }
 
+// ============ Worker-Direct OPFS Bundle Loading ============
+
+// OPFS bundle cache path (matches storage.js)
+const BUNDLE_CACHE_PATH = 'bundle-cache/bundles';
+
+// Capability flag (set during init)
+let canUseWorkerOPFS = false;
+
+// Cached bundlesUrl from init
+let workerBundlesUrl = null;
+
+// Worker-level memory cache for bundles (persists across compiles)
+// This avoids re-reading from OPFS on every compile
+// NOT evicted automatically — bundle set is bounded by the document's dependencies.
+// Use the 'cleanup' message to release explicitly when idle.
+const workerBundleCache = new Map();
+
+/**
+ * Load bundle from OPFS cache directly (bypasses main thread)
+ * @param {string} bundleName
+ * @returns {Promise<ArrayBuffer|null>}
+ */
+async function loadBundleFromOPFS(bundleName, baseUrl) {
+    if (!canUseWorkerOPFS) return null;
+
+    try {
+        const root = await navigator.storage.getDirectory();
+
+        // Navigate to bundle-cache/bundles directory
+        const bundleCacheDir = await root.getDirectoryHandle('bundle-cache', { create: false });
+        const bundlesDir = await bundleCacheDir.getDirectoryHandle('bundles', { create: false });
+        const fileHandle = await bundlesDir.getFileHandle(`${(baseUrl?.match(/\/releases\/(tl2026-[a-f0-9]{16})(?:\/|$)/)?.[1] || 'tl2026-r1')}-${bundleName}.data`, { create: false });
+
+        // Read file content
+        const file = await fileHandle.getFile();
+        const data = await file.arrayBuffer();
+
+        if (data && data.byteLength > 0) {
+            workerLog(`  From OPFS: ${bundleName} (${(data.byteLength / 1024 / 1024).toFixed(1)}MB)`);
+            return data;
+        }
+    } catch (e) {
+        // Not cached or OPFS error - fall through to network
+    }
+    return null;
+}
+
+/**
+ * Fetch bundle from network, save to OPFS
+ * @param {string} bundleName
+ * @param {string} bundlesUrl
+ * @returns {Promise<ArrayBuffer>}
+ */
+async function fetchBundleFromNetwork(bundleName, bundlesUrl) {
+    const url = `${bundlesUrl}/${bundleName}.data.gz`;
+    workerLog(`  Fetching: ${bundleName}`);
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+    const compressed = await response.arrayBuffer();
+
+    // Decompress - only skip if Brotli (browser already decompressed)
+    // Note: Content-Encoding: gzip means transport compression, not file format
+    const encoding = response.headers.get('Content-Encoding');
+    let decompressed;
+    if (encoding === 'br') {
+        // Brotli: browser already decompressed the gzip content
+        decompressed = compressed;
+    } else {
+        // Decompress gzip (file is .data.gz)
+        const ds = new DecompressionStream('gzip');
+        const stream = new Blob([compressed]).stream().pipeThrough(ds);
+        decompressed = await new Response(stream).arrayBuffer();
+    }
+
+    workerLog(`  Fetched: ${bundleName} (${(decompressed.byteLength / 1024 / 1024).toFixed(1)}MB)`);
+
+    // Cache to OPFS (fire-and-forget)
+    if (canUseWorkerOPFS) {
+        saveBundleToOPFS(bundleName, decompressed, bundlesUrl).catch(() => {});
+    }
+
+    return decompressed;
+}
+
+/**
+ * Save bundle to OPFS cache
+ * @param {string} bundleName
+ * @param {ArrayBuffer} data
+ */
+async function saveBundleToOPFS(bundleName, data, baseUrl) {
+    try {
+        const root = await navigator.storage.getDirectory();
+
+        // Create directories if needed
+        const bundleCacheDir = await root.getDirectoryHandle('bundle-cache', { create: true });
+        const bundlesDir = await bundleCacheDir.getDirectoryHandle('bundles', { create: true });
+        const fileHandle = await bundlesDir.getFileHandle(`${(baseUrl?.match(/\/releases\/(tl2026-[a-f0-9]{16})(?:\/|$)/)?.[1] || 'tl2026-r1')}-${bundleName}.data`, { create: true });
+
+        // Write using writable stream
+        const writable = await fileHandle.createWritable();
+        await writable.write(new Uint8Array(data));
+        await writable.close();
+
+        workerLog(`  Cached to OPFS: ${bundleName}`);
+    } catch (e) {
+        // Ignore caching errors - data still usable
+    }
+}
+
+/**
+ * Load bundle: memory cache first, then OPFS, then network, then main thread fallback
+ * @param {string} bundleName
+ * @param {string} bundlesUrl
+ * @returns {Promise<ArrayBuffer>}
+ */
+async function loadBundleInWorker(bundleName, bundlesUrl) {
+    // Fast path: check worker memory cache first (instant, no async)
+    const memCached = workerBundleCache.get(bundleName);
+    if (memCached) {
+        workerLog(`  From memory: ${bundleName}`);
+        return memCached;
+    }
+
+    // Try OPFS cache
+    const opfsCached = await loadBundleFromOPFS(bundleName, bundlesUrl);
+    if (opfsCached) {
+        workerBundleCache.set(bundleName, opfsCached);
+        return opfsCached;
+    }
+
+    // Try network fetch
+    try {
+        const fetched = await fetchBundleFromNetwork(bundleName, bundlesUrl);
+        workerBundleCache.set(bundleName, fetched);
+        return fetched;
+    } catch (e) {
+        workerLog(`  Network failed for ${bundleName}: ${e.message}`);
+    }
+
+    // Fallback: request from main thread (Safari or network errors)
+    const result = await requestBundleFetch(bundleName);
+    if (result.success) {
+        workerBundleCache.set(bundleName, result.bundleData);
+        return result.bundleData;
+    }
+    throw new Error(`Failed to load ${bundleName}`);
+}
+
+/**
+ * Detect if worker can use OPFS directly
+ * Safari doesn't support createSyncAccessHandle in workers,
+ * but we only need async file access for bundle loading
+ */
+async function detectWorkerOPFS() {
+    try {
+        // Check if OPFS is available
+        if (typeof navigator === 'undefined' || !navigator.storage?.getDirectory) {
+            return false;
+        }
+
+        // Try to access OPFS root
+        const root = await navigator.storage.getDirectory();
+        if (!root) return false;
+
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 // ============ External Fetch Requests ============
 
-function requestCtanFetch(packageName) {
+// Supported TexLive years for version fallback (newest first)
+const SUPPORTED_TL_YEARS = [2026, 2025, 2024, 2023];
+const DEFAULT_TL_YEAR = 2026;
+
+// Request IDs only correlate messages within this worker, including on HTTP LAN origins.
+let nextFetchRequestId = 0;
+
+function requestCtanFetch(packageName, originalFileName = null, tlYear = null) {
     return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
+        const requestId = String(++nextFetchRequestId);
         pendingCtanRequests.set(requestId, { resolve, reject });
 
         self.postMessage({
             type: 'ctan-fetch-request',
             requestId,
             packageName,
+            fileName: originalFileName || packageName + '.sty',  // For file-to-package lookup
+            tlYear,  // Optional: request specific TexLive year
         });
 
         setTimeout(() => {
@@ -603,7 +1100,7 @@ function requestCtanFetch(packageName) {
 
 function requestBundleFetch(bundleName) {
     return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
+        const requestId = String(++nextFetchRequestId);
         pendingBundleRequests.set(requestId, { resolve, reject });
 
         self.postMessage({
@@ -623,7 +1120,7 @@ function requestBundleFetch(bundleName) {
 
 function requestFileRangeFetch(bundleName, start, end) {
     return new Promise((resolve, reject) => {
-        const requestId = crypto.randomUUID();
+        const requestId = String(++nextFetchRequestId);
         pendingFileRangeRequests.set(requestId, { resolve, reject });
 
         self.postMessage({
@@ -649,75 +1146,315 @@ function injectMicrotypeWorkaround(source) {
     if (!source.includes('microtype')) return source;
     const documentclassMatch = source.match(/\\documentclass/);
     if (!documentclassMatch) return source;
+    // Insert on same line as \documentclass to preserve line numbers
     const insertPos = documentclassMatch.index;
-    const workaround = '% Siglum: Disable microtype font expansion\n\\PassOptionsToPackage{expansion=false}{microtype}\n';
     workerLog('Injecting microtype expansion=false workaround');
-    return source.slice(0, insertPos) + workaround + source.slice(insertPos);
+    return source.slice(0, insertPos) + '\\PassOptionsToPackage{expansion=false}{microtype}' + source.slice(insertPos);
 }
 
-function injectPdfMapFileCommands(source, mapFilePaths) {
-    if (mapFilePaths.length === 0) return source;
-    const newMaps = mapFilePaths.filter(p => !source.includes(p));
-    if (newMaps.length === 0) return source;
+// Compatibility shims for package version issues
+// These fix issues where CTAN packages expect features not in our kernel
 
-    const mapCommands = newMaps.map(p => '\\pdfmapfile{+' + p + '}').join('\n');
-    const documentclassMatch = source.match(/\\documentclass(\[[^\]]*\])?\{[^}]+\}/);
-
-    if (documentclassMatch) {
-        const insertPos = documentclassMatch.index + documentclassMatch[0].length;
-        const preambleInsert = '\n% Font maps injected by Siglum\n' + mapCommands + '\n';
-        workerLog('Injecting ' + newMaps.length + ' \\pdfmapfile commands');
-        return source.slice(0, insertPos) + preambleInsert + source.slice(insertPos);
-    }
+function injectKernelCompatShim(source) {
+    // Reserved for future use - version fallback system will handle compatibility
     return source;
+}
+
+// Patterns that indicate LaTeX3 tagging/accessibility features not in our kernel
+// These are used to detect when a package needs version fallback or shimming
+// Detection is pattern-based, not hardcoded to specific commands
+const KERNEL_INCOMPATIBLE_PATTERNS = [
+    /^tag(struct|mc|pdf)/i,           // tagstructbegin, tagmcend, tagpdfparaOff, etc.
+    /Structure(Name|Role)/i,          // NewStructureName, AssignStructureRole, etc.
+    /TaggingSocket/i,                 // NewTaggingSocket, UseTaggingSocket, etc.
+    /DocumentMetadata/i,              // DocumentMetadata, DeclareDocumentMetadata
+    /PDFManagement/i,                 // IfPDFManagementActiveTF
+    /^socket_/i,                      // socket_new, socket_set, etc.
+];
+
+// Check if a command matches kernel incompatibility patterns
+function isKernelIncompatibleCommand(cmd) {
+    return KERNEL_INCOMPATIBLE_PATTERNS.some(pattern => pattern.test(cmd));
+}
+
+// Check if undefined commands indicate kernel incompatibility
+// Returns list of packages that should be tried with older TL versions
+function detectKernelIncompatibility(logContent, undefinedCommands) {
+    const incompatiblePackages = new Set();
+
+    // Check if any undefined commands match kernel incompatibility patterns
+    for (const cmd of undefinedCommands.keys()) {
+        if (isKernelIncompatibleCommand(cmd)) {
+            workerLog(`[KERNEL] Detected kernel-incompatible command: \\${cmd}`);
+
+            // Try to identify which package triggered this
+            const pkgMatch = identifyPackageFromLog(logContent, cmd);
+            if (pkgMatch) {
+                incompatiblePackages.add(pkgMatch);
+                workerLog(`[KERNEL] Command \\${cmd} is from package: ${pkgMatch}`);
+            }
+        }
+    }
+
+    return incompatiblePackages;
+}
+
+// Try to identify which package is causing the undefined command
+// Parses TeX log file loading structure to find the currently-loading file
+function identifyPackageFromLog(logContent, cmd) {
+    const errorIndex = logContent.indexOf(`\\${cmd}`);
+    if (errorIndex === -1) return null;
+
+    // Get context before the error
+    let contextBefore = logContent.slice(Math.max(0, errorIndex - 10000), errorIndex);
+
+    // Preprocess: Remove [TeX] and [TeX ERR] prefixes from each line
+    contextBefore = contextBefore.replace(/^\[TeX( ERR)?\] /gm, '');
+
+    // Preprocess: Join wrapped lines (TeX wraps at ~79 chars)
+    contextBefore = contextBefore.replace(/([a-zA-Z0-9_.-])\n([a-zA-Z0-9_.-])/g, '$1$2');
+
+    // Find all .sty and .cls file opens with their positions
+    const fileOpens = [];
+    const openRegex = /\(([^\s()"']*\/([^\/]+)\.(sty|cls))/gi;
+    for (const match of contextBefore.matchAll(openRegex)) {
+        fileOpens.push({
+            pos: match.index,
+            path: match[1],
+            name: match[2]
+        });
+    }
+
+    // For each file open (from last to first), check if it's still open
+    // by counting ( and ) between the open position and end of context
+    for (let i = fileOpens.length - 1; i >= 0; i--) {
+        const file = fileOpens[i];
+        const afterOpen = contextBefore.slice(file.pos);
+
+        // Count parens in the text after this file open
+        let depth = 0;
+        for (const char of afterOpen) {
+            if (char === '(') depth++;
+            else if (char === ')') depth--;
+            // If depth goes negative, this file has been closed
+            if (depth < 0) break;
+        }
+
+        // If depth > 0, this file is still open at the error point
+        // (depth=0 means balanced parens = file was closed)
+        if (depth > 0) {
+            workerLog(`[KERNEL] Found open package: ${file.name} (depth=${depth})`);
+            return file.name;
+        }
+    }
+
+    // Fallback: Try to match "Package foo" pattern in log messages
+    workerLog(`[KERNEL] No open package found, trying Package pattern fallback`);
+    const packageMatches = [...contextBefore.matchAll(/Package\s+([\w-]+)\s+(?:Info|Warning|Error)/g)];
+    if (packageMatches.length > 0) {
+        const fallbackPkg = packageMatches[packageMatches.length - 1][1];
+        workerLog(`[KERNEL] Fallback found: ${fallbackPkg}`);
+        return fallbackPkg;
+    }
+
+    return null;
+}
+
+// Extract undefined control sequences from TeX log with argument count detection
+function extractUndefinedCommands(logContent) {
+    const commands = new Map(); // cmd -> argCount
+    // Pattern: "! Undefined control sequence." followed by lines with command and args
+    // Log format (with [TeX] prefixes):
+    //   [TeX] ! Undefined control sequence.
+    //   [TeX] l.76 \NewStructureName
+    //   [TeX]                       {tcb/box}
+    // Or with multiple commands:
+    //   [TeX] l.81   {\par\tagstructbegin
+    //   [TeX]                            {tag=...}
+    // The LAST command before the line break is the undefined one
+
+    const errorPattern = /! Undefined control sequence\./g;
+    let errorMatch;
+
+    while ((errorMatch = errorPattern.exec(logContent)) !== null) {
+        // Get the next ~500 chars to find the command and its arguments
+        const context = logContent.slice(errorMatch.index, errorMatch.index + 500);
+
+        // Find the line with "l.N" - this contains the undefined command
+        const lineMatch = context.match(/l\.\d+[^\n]*/);
+        if (!lineMatch) continue;
+
+        const errorLine = lineMatch[0];
+
+        // Find ALL commands on this line - the LAST one is the undefined one
+        const cmdMatches = [...errorLine.matchAll(/\\([a-zA-Z]+)/g)];
+        if (cmdMatches.length === 0) continue;
+
+        // The undefined command is the last one on the line
+        const lastMatch = cmdMatches[cmdMatches.length - 1];
+        const cmd = lastMatch[1];
+        if (cmd.length < 2 || cmd.length > 50) continue;
+
+        // Get everything after this command to count arguments
+        const afterCmd = context.slice(lineMatch.index + lastMatch.index + lastMatch[0].length);
+        // Stop at next error, "==>" marker, or "Transcript"
+        const endMatch = afterCmd.match(/!|==>|Transcript/);
+        const argContext = endMatch ? afterCmd.slice(0, endMatch.index) : afterCmd;
+
+        // Count opening braces
+        const braceCount = (argContext.match(/\{/g) || []).length;
+        const argCount = Math.min(braceCount, 9);
+
+        if (!commands.has(cmd) || commands.get(cmd) < argCount) {
+            commands.set(cmd, argCount);
+        }
+    }
+    return commands;
 }
 
 // ============ Missing File Detection ============
 
 function extractMissingFile(logContent, alreadyFetched) {
+    const files = extractAllMissingFiles(logContent, alreadyFetched);
+    return files.length > 0 ? files[0] : null;
+}
+
+// Extract ALL missing files from log (for parallel fetching)
+function extractAllMissingFiles(logContent, alreadyFetched) {
     const patterns = [
-        /! LaTeX Error: File `([^']+)' not found/g,
-        /! I can't find file `([^']+)'/g,
-        /LaTeX Warning:.*File `([^']+)' not found/g,
-        /Package .* Error:.*`([^']+)' not found/g,
-        /! Font [^=]+=([a-z0-9]+) at .* not loadable: Metric \(TFM\) file/g,
-        /!pdfTeX error:.*\(file ([a-z0-9]+)\): Font .* not found/g,
-        /! Font ([a-z]+[0-9]+) at [0-9]+ not found/g,
+        /! LaTeX Error: File [`'\u2018]([^'\u2019]+)['\u2019] not found/g,
+        /! I can't find file [`'\u2018]([^'\u2019]+)['\u2019]/g,
+        /LaTeX Warning:.*File [`'\u2018]([^'\u2019]+)['\u2019] not found/g,
+        /Package .* Error:.*[`'\u2018]([^'\u2019]+)['\u2019] not found/g,
+        /! Font [^=]+=([a-z0-9-]+) at .* not loadable: Metric \(TFM\) file/g,
+        /!pdfTeX error:.*\(file ([a-z0-9-]+)\): Font .* not found/g,
+        /! Font ([a-z0-9-]+) at [0-9]+ not found/g,
+        // Generic PGF/TeX: "I looked for files named X.code.tex" (captures first filename)
+        /I looked for files named ([a-z0-9_-]+\.code\.tex)/gi,
+        // xdvipdfmx: Could not locate a virtual/physical font for TFM "ec-lmbx12"
+        /xdvipdfmx.*Could not locate.*TFM "([a-z0-9_-]+)"/gi,
+        // xdvipdfmx: This font is mapped to a physical font "lmbx12.pfb"
+        /xdvipdfmx.*mapped to.*"([a-z0-9_-]+\.pfb)"/gi,
     ];
     const fetchedSet = alreadyFetched || new Set();
+    const missingFiles = [];
+    const seenPkgs = new Set();
 
     for (const pattern of patterns) {
         let match;
         while ((match = pattern.exec(logContent)) !== null) {
             const missingFile = match[1];
             const pkgName = getPackageFromFile(missingFile);
-            if (!fetchedSet.has(pkgName)) return missingFile;
+            if (!fetchedSet.has(pkgName) && !seenPkgs.has(pkgName)) {
+                seenPkgs.add(pkgName);
+                missingFiles.push(missingFile);
+            }
         }
     }
-    return null;
+    return missingFiles;
 }
 
 function getFontPackage(fontName) {
-    if (/^(ec|tc)[a-z]{2}\d+$/.test(fontName)) return 'cm-super';
+    if (!fontName) return null;
+
+    // Strip font extension if present
+    const baseName = fontName.replace(/\.(pfb|tfm)$/i, '');
+
+    // Dynamic lookup: check font file index first (covers ALL fonts in bundles)
+    if (fontFileToBundle) {
+        // Try as .pfb file (physical font)
+        let bundle = fontFileToBundle.get(baseName + '.pfb');
+        if (bundle) return bundle;
+
+        // Try as .tfm file (TFM name like "ec-lmbx12")
+        bundle = fontFileToBundle.get(baseName + '.tfm');
+        if (bundle) return bundle;
+    }
+
+    // Fallback: Latin Modern patterns for CTAN fetch (when not in local bundles)
+    if (/^(rm|cs|ec|ts|qx|t5|l7x)-?lm/.test(baseName)) return 'lm';
+    if (/^lm[a-z]{1,4}\d+$/.test(baseName)) return 'lm';
+
     return null;
 }
 
 function getPackageFromFile(filename) {
     const fontPkg = getFontPackage(filename);
     if (fontPkg) return fontPkg;
-    return filename.replace(/\.(sty|cls|def|clo|fd|cfg|tex)$/, '');
+
+    // Strip extension - the file-to-package index handles the mapping
+    return filename.replace(/\.(sty|cls|def|clo|fd|cfg|tex|code\.tex)$/, '');
 }
 
 // ============ Aux File Handling ============
 
+// Main document base path on the VFS (no extension). Set per-compile from
+// options.mainFile so on-disk files and TeX log/error messages use the real
+// name. Defaults to '/document' to preserve legacy behavior.
+let docBase = '/document';
+
+// Top-level VFS dirs to skip when snapshotting the working tree for preamble
+// side-effect detection: the mounted texmf tree (huge, not document output) and
+// the Emscripten system dirs. Everything else is document/package output.
+const SNAPSHOT_PRUNE_DIRS = new Set(['texlive', 'bin', 'dev', 'proc', 'tmp', 'home', 'sys', 'lib', 'etc']);
+
+// Set of absolute file paths in the working tree, excluding the pruned dirs.
+// Recursive so files a preamble writes into subdirectories are seen too.
+function snapshotWorkTree(FS) {
+    const files = new Set();
+    const walk = (dir) => {
+        let entries;
+        try { entries = FS.readdir(dir); } catch (e) { return; }
+        for (const name of entries) {
+            if (name === '.' || name === '..') continue;
+            if (dir === '/' && SNAPSHOT_PRUNE_DIRS.has(name)) continue;
+            const path = dir === '/' ? '/' + name : dir + '/' + name;
+            let mode;
+            try { mode = FS.stat(path).mode; } catch (e) { continue; }
+            if (FS.isDir(mode)) walk(path);
+            else files.add(path);
+        }
+    };
+    walk('/');
+    return files;
+}
+
+// Restore captured preamble side-effect files (keyed by absolute path) into the
+// VFS, creating parent directories as needed. Used on cached-format reuse.
+function restoreSideEffectFiles(FS, sideEffectFiles) {
+    if (!sideEffectFiles) return 0;
+    let n = 0;
+    for (const [path, data] of Object.entries(sideEffectFiles)) {
+        try {
+            const slash = path.lastIndexOf('/');
+            if (slash > 0) {
+                let cur = '';
+                for (const part of path.slice(0, slash).split('/').filter(Boolean)) {
+                    cur += '/' + part;
+                    try { FS.mkdir(cur); } catch (e) { /* exists */ }
+                }
+            }
+            FS.writeFile(path, data instanceof Uint8Array ? data : new Uint8Array(data));
+            n++;
+        } catch (e) { workerLog(`Failed to restore side-effect file ${path}: ${e.message}`); }
+    }
+    return n;
+}
+
 function collectAuxFiles(FS) {
-    const auxExtensions = ['.aux', '.toc', '.lof', '.lot', '.out', '.nav', '.snm', '.bbl', '.blg'];
+    const auxExtensions = ['.aux', '.toc', '.lof', '.lot', '.out', '.nav', '.snm', '.bbl', '.blg', '-blx.bib'];
     const files = {};
     for (const ext of auxExtensions) {
-        const path = '/document' + ext;
+        const path = docBase + ext;
         try {
             files[ext] = FS.readFile(path, { encoding: 'utf8' });
         } catch (e) {}
+    }
+    // Included chapters have their own aux files; BibTeX follows \@input entries.
+    for (const path of snapshotWorkTree(FS)) {
+        if (path.endsWith('.aux') && path !== docBase + '.aux') {
+            try { files['@' + path] = FS.readFile(path, { encoding: 'utf8' }); } catch {}
+        }
     }
     return files;
 }
@@ -726,7 +1463,9 @@ function restoreAuxFiles(FS, auxFiles) {
     let restored = 0;
     for (const [ext, content] of Object.entries(auxFiles)) {
         try {
-            FS.writeFile('/document' + ext, content);
+            const path = ext.startsWith('@/') ? ext.slice(1) : docBase + ext;
+            FS.mkdirTree(path.slice(0, path.lastIndexOf('/')) || '/');
+            FS.writeFile(path, content);
             restored++;
         } catch (e) {}
     }
@@ -735,10 +1474,26 @@ function restoreAuxFiles(FS, auxFiles) {
 
 // ============ WASM Initialization ============
 
-async function initBusyTeX(wasmModule, jsUrl) {
-    workerLog('Initializing WASM...');
+// Track if busytex.js has been loaded
+let busytexScriptLoaded = false;
+
+async function initBusyTeX(wasmModule, jsUrl, memorySnapshot = null) {
     const startTime = performance.now();
-    importScripts(jsUrl);
+
+    // Only load busytex.js once - it defines the global `busytex` function
+    // Use fetch + Blob URL to support cross-origin CDN loading (importScripts has stricter CORS)
+    if (!busytexScriptLoaded) {
+        const response = await fetch(jsUrl);
+        if (!response.ok) throw new Error(`Failed to fetch busytex.js: ${response.status}`);
+        const code = await response.text();
+        const blob = new Blob([code], { type: 'application/javascript' });
+        importScripts(URL.createObjectURL(blob));
+        busytexScriptLoaded = true;
+    }
+
+    // Output capture for stdout/stderr - accessible by print/printErr callbacks via closure
+    // Use arrays for O(n) performance instead of string concat O(n²)
+    const outputCapture = { stdout: [], stderr: [] };
 
     const moduleConfig = {
         thisProgram: '/bin/busytex',
@@ -746,6 +1501,37 @@ async function initBusyTeX(wasmModule, jsUrl) {
         noExitRuntime: true,
         instantiateWasm: (imports, successCallback) => {
             WebAssembly.instantiate(wasmModule, imports).then(instance => {
+                // Restore memory from snapshot if available (skips ~3s TeX initialization)
+                if (memorySnapshot) {
+                    try {
+                        const memory = instance.exports.memory;
+                        const snapshotView = memorySnapshot instanceof Uint8Array
+                            ? memorySnapshot
+                            : new Uint8Array(memorySnapshot);
+                        const memoryView = new Uint8Array(memory.buffer);
+
+                        // Only restore if snapshot fits in current memory
+                        if (snapshotView.byteLength <= memoryView.byteLength) {
+                            memoryView.set(snapshotView);
+                            workerLog(`Restored memory snapshot (${(snapshotView.byteLength / 1024 / 1024).toFixed(1)}MB)`);
+                        } else {
+                            // Need to grow memory to fit snapshot
+                            const currentPages = memory.buffer.byteLength / 65536;
+                            const neededPages = Math.ceil(snapshotView.byteLength / 65536);
+                            const pagesToGrow = neededPages - currentPages;
+                            if (pagesToGrow > 0) {
+                                memory.grow(pagesToGrow);
+                                const grownView = new Uint8Array(memory.buffer);
+                                grownView.set(snapshotView);
+                                workerLog(`Restored memory snapshot (${(snapshotView.byteLength / 1024 / 1024).toFixed(1)}MB) after growing memory`);
+                            } else {
+                                workerLog('Memory snapshot size mismatch, skipping restore');
+                            }
+                        }
+                    } catch (e) {
+                        workerLog('Failed to restore memory snapshot: ' + e.message);
+                    }
+                }
                 successCallback(instance);
             });
             return {};
@@ -758,12 +1544,18 @@ async function initBusyTeX(wasmModule, jsUrl) {
                 text.includes('font file present but not included') ||
                 text.includes('invalid entry for') ||
                 text.includes('SlantFont/ExtendFont')) return;
-            workerLog('[TeX] ' + text);
+            // Only log TeX stdout in verbose mode (saves ~4000 postMessage calls)
+            if (verboseLogging) workerLog('[TeX] ' + text);
+            // Capture stdout for error detection
+            outputCapture.stdout.push(text);
         },
         printErr: (text) => {
             // Suppress font generation attempts (not supported in WASM)
             if (text.includes('mktexpk') || text.includes('kpathsea: fork')) return;
+            // Always log errors regardless of verbose mode
             workerLog('[TeX ERR] ' + text);
+            // Capture stderr for error detection
+            outputCapture.stderr.push(text);
         },
         locateFile: (path) => path,
         preRun: [function() {
@@ -783,29 +1575,55 @@ async function initBusyTeX(wasmModule, jsUrl) {
 
     Module.callMainWithRedirects = function(args = [], print = false) {
         Module.do_print = print;
-        Module.output_stdout = '';
-        Module.output_stderr = '';
+        // Reset output capture before each call
+        outputCapture.stdout.length = 0;
+        outputCapture.stderr.length = 0;
         if (args.length > 0) Module.setPrefix(args[0]);
         const exit_code = Module.callMain(args);
         Module._flush_streams();
-        return { exit_code, stdout: Module.output_stdout, stderr: Module.output_stderr };
+        // Join arrays into strings for return (single O(n) operation)
+        return { exit_code, stdout: outputCapture.stdout.join('\n'), stderr: outputCapture.stderr.join('\n') };
     };
 
-    workerLog('WASM ready in ' + (performance.now() - startTime).toFixed(0) + 'ms');
+    const elapsed = (performance.now() - startTime).toFixed(0);
+    workerLog(`WASM ready in ${elapsed}ms`);
     return Module;
 }
 
 /**
- * Create a fresh Module instance for each operation
+ * Create a fresh Module instance for each operation.
  *
- * Note: We previously tried reusing a globalModule to avoid memory leaks,
- * but pdfTeX has internal C globals (glyph_unicode_tree, etc.) that don't
- * reset between invocations, causing assertion failures in format generation.
- * Until we can properly reset pdfTeX state, each operation needs a fresh Module.
+ * We create fresh each time because pdfTeX has internal C globals
+ * (glyph_unicode_tree, etc.) that don't reset between invocations,
+ * causing assertion failures and memory issues.
  */
 async function getOrCreateModule() {
-    // Always create fresh Module - pdfTeX internal state doesn't reset properly
-    return await initBusyTeX(cachedWasmModule, busytexJsUrl);
+    // Destroy previous module to free WASM memory (prevents 900MB accumulation).
+    // Skip if the module hasn't been used yet (e.g. just pre-instantiated during init) —
+    // this lets the first compile reuse the eagerly-created module instead of paying
+    // ~150ms for a redundant destroy+reinstantiate.
+    if (globalModule && globalModuleUsed) {
+        self.postMessage({ type: 'log', message: '[MEMORY] Destroying previous module before creating new one' });
+        destroyModule(globalModule);
+        globalModule = null;
+    }
+
+    if (!globalModule) {
+        // Wait for any in-flight background pre-instantiation
+        if (globalModulePromise) {
+            await globalModulePromise;
+            globalModulePromise = null;
+        }
+
+        // Still null if pre-instantiation failed or wasn't started
+        if (!globalModule) {
+            globalModule = await initBusyTeX(cachedWasmModule, busytexJsUrl, null);
+            self.postMessage({ type: 'log', message: '[MEMORY] New module created' });
+        }
+    }
+
+    globalModuleUsed = true;
+    return globalModule;
 }
 
 /**
@@ -816,7 +1634,7 @@ function resetFS(FS) {
     // Remove /texlive entirely and recreate structure
     try {
         // Remove dynamically created directories
-        const dirsToClean = ['/texlive', '/document.pdf', '/document.log', '/document.aux'];
+        const dirsToClean = ['/texlive', docBase + '.pdf', docBase + '.log', docBase + '.aux'];
         for (const path of dirsToClean) {
             try {
                 const stat = FS.stat(path);
@@ -849,13 +1667,88 @@ function resetFS(FS) {
     }
 }
 
+// ============ Pass Prediction ============
+
+// Pre-compiled regexes for pass prediction (avoid recreating on each call)
+// Features requiring 3 passes (ToC, index)
+const MULTIPASS_3_REGEX = /\\(?:tableofcontents|listoffigures|listoftables|printindex|makeindex)\b/;
+// Features requiring 2+ passes (refs, cites, labels, bibliography)
+const MULTIPASS_2_REGEX = /\\(?:ref\{|pageref\{|eqref\{|autoref\{|cite[pt]?\{|citep\{|citet\{|autocite\{|textcite\{|label\{|bibliography\{|printbibliography|addbibresource)/;
+
+/**
+ * Predict minimum passes needed based on source analysis.
+ * Returns 1 for simple docs, 2-3 for docs with cross-references.
+ * Uses pre-compiled regexes and early exit for efficiency.
+ */
+function predictRequiredPasses(source) {
+    if (!source) return 1;
+
+    // Check for 3-pass features first (ToC, index)
+    if (MULTIPASS_3_REGEX.test(source)) {
+        return 3;
+    }
+
+    // Check for 2-pass features (refs, cites, labels, bib)
+    if (MULTIPASS_2_REGEX.test(source)) {
+        return 2;
+    }
+
+    // No cross-reference features → single pass sufficient
+    return 1;
+}
+
+// ============ Aux File Hashing ============
+
+/**
+ * Fast DJB2 hash for aux file comparison.
+ * Faster than string comparison for large files.
+ */
+function quickHash(content) {
+    let hash = 5381 >>> 0;
+    const len = content.length;
+    for (let i = 0; i < len; i++) {
+        hash = ((hash * 33) ^ content.charCodeAt(i)) >>> 0;
+    }
+    return hash;
+}
+
+// Aux file extensions in fixed order for consistent hashing
+
+
+/**
+ * Hash all aux files into a single combined hash.
+ * Used to detect changes between compilation passes.
+ * Uses fixed extension order to avoid sort() allocation.
+ */
+function hashAuxFiles(auxFiles) {
+    if (!auxFiles) return 0;
+
+    let combined = 0;
+    for (const ext of Object.keys(auxFiles).sort()) {
+        const content = auxFiles[ext];
+        if (content) {
+            combined ^= quickHash(content);
+        }
+    }
+    return combined;
+}
+
 // ============ Compilation ============
 
 async function handleCompile(request) {
-    const { id, source, engine, options, bundleData, ctanFiles, cachedFormat, cachedAuxFiles, deferredBundleNames } = request;
+    const { id, source, engine, options, bundleData, bundleNames, bundlesUrl, ctanFiles, cachedFormat, cachedAuxFiles, deferredBundleNames, mainFile } = request;
+
+    // The compiler validates project paths. Keep the directory so TeX can resolve ../ inputs.
+    const sourcePath = '/' + (mainFile || 'document.tex').replace(/^\/+/, '');
+    docBase = sourcePath.replace(/\.tex$/i, '');
+    const workingDirectory = sourcePath.slice(0, sourcePath.lastIndexOf('/')) || '/';
+
+    // Allow runtime verbose toggle via compile options
+    if (options?.verbose !== undefined) {
+        verboseLogging = options.verbose;
+    }
 
     workerLog('=== Compilation Started ===');
-    const totalStart = performance.now();
 
     // Fallback to bundleDeps.deferred if not passed in message (for older compilers)
     const effectiveDeferredBundles = deferredBundleNames || bundleDeps?.deferred || [];
@@ -864,27 +1757,80 @@ async function handleCompile(request) {
     if (!fileManifest) throw new Error('fileManifest not set');
 
     // Track accumulated resources across retries
-    const bundleDataMap = bundleData instanceof Map ? bundleData : new Map(Object.entries(bundleData));
+    const bundleDataMap = new Map();
     const bundleMetaMap = new Map(); // Store bundle metadata for dynamically loaded bundles
     const accumulatedCtanFiles = new Map();
+
+    // Load bundles from OPFS/network if names provided (worker-direct loading)
+    // This avoids main thread memory usage for bundle data
+    // Done BEFORE totalStart — bundle I/O is setup, not compilation.
+    if (bundleNames && bundleNames.length > 0) {
+        workerLog(`Loading ${bundleNames.length} bundles (worker-direct)...`);
+        const effectiveUrl = bundlesUrl || workerBundlesUrl;
+
+        await Promise.all(bundleNames.map(async (name) => {
+            try {
+                const data = await loadBundleInWorker(name, effectiveUrl);
+                if (data) bundleDataMap.set(name, data);
+            } catch (e) {
+                workerLog(`Failed to load ${name}: ${e.message}`);
+            }
+        }));
+        workerLog(`Loaded ${bundleDataMap.size}/${bundleNames.length} bundles`);
+    }
+    // Backward compat - bundles sent directly in message (legacy path)
+    else if (bundleData) {
+        const data = bundleData instanceof Map ? bundleData : new Map(Object.entries(bundleData || {}));
+        for (const [name, d] of data) bundleDataMap.set(name, d);
+    }
+
+    const totalStart = performance.now();
 
     // Bundles to load on-demand (e.g., font bundles like cm-super)
     const deferredBundles = new Set(effectiveDeferredBundles);
 
+    // Add CTAN files from current request
     if (ctanFiles) {
         const ctanFilesMap = ctanFiles instanceof Map ? ctanFiles : new Map(Object.entries(ctanFiles));
         for (const [path, content] of ctanFilesMap) accumulatedCtanFiles.set(path, content);
     }
 
     let pdfData = null;
+    let syncTexData = null;  // SyncTeX data for source/PDF synchronization
     let compileSuccess = false;
     let retryCount = 0;
-    const maxRetries = 10;
+    const maxRetries = options.maxRetries ?? 15;  // Configurable, default 15
     const fetchedPackages = new Set();
     // Use global cache for Range-fetched files (persists across compiles)
     let lastExitCode = -1;
+    let texLog = '';
+    let compileError = '';
     let Module = null;
     let FS = null;
+
+    // Auto-rerun tracking for cross-references/TOC
+    // Predict passes needed based on source analysis
+    const predictedPasses = predictRequiredPasses(source);
+    let rerunPass = 0;
+    let maxRerunPasses = predictedPasses - 1;  // 1 initial + N reruns
+
+    if (predictedPasses === 1) {
+        workerLog('Single-pass mode: no cross-references detected');
+    }
+
+    // Signature for the finalize() output cache. Only safe to cache when no CTAN
+    // files or version-fallback overrides are in play (those mutate the texlive tree
+    // in ways the bundle-name set alone doesn't capture). Recomputed each use because
+    // bundleDataMap can grow across retries (dynamic bundle loading).
+    const computeFinalizeSig = () =>
+        (accumulatedCtanFiles.size === 0 && packageTLVersions.size === 0)
+            ? 'b:' + [...bundleDataMap.keys()].sort().join(',') +
+              '|d:' + [...deferredBundles].sort().join(',')
+            : null;
+
+    // Version fallback tracking for packages with kernel incompatibility
+    // Map<packageName, tlYear> - which TL year to use for each package
+    const packageTLVersions = new Map();
 
     while (!compileSuccess && retryCount < maxRetries) {
         if (retryCount > 0) {
@@ -892,24 +1838,27 @@ async function handleCompile(request) {
         }
 
         try {
+            // [PERF] Phase-2 cost attribution markers (worker-side, same clock as totalStart)
+            const _pModuleStart = performance.now();
             // Get or create global WASM instance (reused to avoid memory leaks)
             Module = await getOrCreateModule();
             FS = Module.FS;
+            const _pModuleEnd = performance.now();
 
             // Reset filesystem for clean compilation
             resetFS(FS);
+            const _pResetEnd = performance.now();
 
             // Create VFS with unified mount handling
-            const vfs = new VirtualFileSystem(FS, {
+            let vfs = new VirtualFileSystem(FS, {
                 onLog: workerLog,
                 lazyEnabled: options.enableLazyFS,
                 fetchedFilesCache: globalFetchedFilesCache  // Persist across compiles
             });
 
-            // Only patch for lazy loading once (on first use)
-            if (options.enableLazyFS && !Module._lazyPatchApplied) {
+            // Register this VFS for lazy loading (updates the holder each compile)
+            if (options.enableLazyFS) {
                 vfs.patchForLazyLoading();
-                Module._lazyPatchApplied = true;
             }
 
             // Mount all bundles (regular and deferred)
@@ -928,9 +1877,14 @@ async function handleCompile(request) {
             }
 
             // Mount CTAN files
+            // Use forceOverride when we have version fallback packages to override bundle files
             if (accumulatedCtanFiles.size > 0) {
-                vfs.mountCtanFiles(accumulatedCtanFiles);
+                const hasVersionFallback = packageTLVersions.size > 0;
+                vfs.mountCtanFiles(accumulatedCtanFiles, { forceOverride: hasVersionFallback });
             }
+
+            FS.mkdirTree(workingDirectory);
+            FS.chdir(workingDirectory);
 
             // Restore aux files
             if (cachedAuxFiles && Object.keys(cachedAuxFiles).length > 0) {
@@ -938,8 +1892,36 @@ async function handleCompile(request) {
                 if (restored > 0) workerLog(`Restored ${restored} aux files`);
             }
 
-            // Finalize VFS - processes font maps, generates ls-R
-            vfs.finalize();
+            const _pMountEnd = performance.now();
+
+            // Finalize VFS - processes font maps, generates ls-R (cached when safe)
+            finalizeVfsCached(vfs, computeFinalizeSig());
+            const _pFinalizeEnd = performance.now();
+
+            // Every TeX/BibTeX pass gets fresh C globals but the same project cwd,
+            // mounted input files, and auxiliary files from the preceding pass.
+            const resetForPass = async (auxFiles) => {
+                Module = await getOrCreateModule();
+                FS = Module.FS;
+                resetFS(FS);
+                vfs = new VirtualFileSystem(FS, {
+                    onLog: workerLog, lazyEnabled: options.enableLazyFS,
+                    fetchedFilesCache: globalFetchedFilesCache
+                });
+                if (options.enableLazyFS) vfs.patchForLazyLoading();
+                for (const [name, data] of bundleDataMap) {
+                    vfs.mountBundle(name, data, fileManifest, bundleMetaMap.get(name) || null);
+                }
+                for (const name of deferredBundles) {
+                    if (!bundleDataMap.has(name)) vfs.mountDeferredBundle(name, fileManifest, null);
+                }
+                if (accumulatedCtanFiles.size) vfs.mountCtanFiles(accumulatedCtanFiles, { forceOverride: packageTLVersions.size > 0 });
+                FS.mkdirTree(workingDirectory);
+                FS.chdir(workingDirectory);
+                restoreAuxFiles(FS, auxFiles);
+                finalizeVfsCached(vfs, computeFinalizeSig());
+            };
+
 
             // Prepare document source
             let docSource = source;
@@ -953,8 +1935,19 @@ async function handleCompile(request) {
                     FS.writeFile('/custom.fmt', cachedFormat.fmtData);
                     fmtPath = '/custom.fmt';
                     workerLog('Using custom format');
+                    // Restore files the preamble wrote during format precompilation
+                    // (e.g. insdljs' .djs). Reusing the format skips the preamble,
+                    // so without this the body's \input of them would fail.
+                    const nRestored = restoreSideEffectFiles(FS, cachedFormat.sideEffectFiles);
+                    if (nRestored > 0) workerLog(`Restored ${nRestored} preamble side-effect file(s) for cached format`);
                     const beginDocIdx = source.indexOf('\\begin{document}');
-                    if (beginDocIdx !== -1) docSource = source.substring(beginDocIdx);
+                    if (beginDocIdx !== -1) {
+                        // Pad stripped preamble with comment lines so TeX line numbers
+                        // stay aligned with the editor (no offset correction needed)
+                        let n = 0;
+                        for (let i = 0; i < beginDocIdx; i++) if (source.charCodeAt(i) === 10) n++;
+                        docSource = '%\n'.repeat(n) + source.substring(beginDocIdx);
+                    }
                 } else {
                     workerLog('Custom format buffer is detached, using default format');
                 }
@@ -964,64 +1957,284 @@ async function handleCompile(request) {
                 docSource = injectMicrotypeWorkaround(docSource);
             }
 
-            // Font maps are now handled by VFS.processFontMaps() - no need to inject \pdfmapfile commands
+            // Inject kernel compatibility shim for packages using TL2026+ tagging features
+            docSource = injectKernelCompatShim(docSource);
 
-            FS.writeFile('/document.tex', docSource);
+            FS.writeFile(sourcePath, docSource);
 
             // Run compilation
             workerProgress('compile', `Running ${engine}...`);
+            const _pCallStart = performance.now();
             let result;
 
             if (engine === 'pdflatex') {
                 result = Module.callMainWithRedirects([
                     'pdflatex', '--no-shell-escape', '--interaction=nonstopmode',
-                    '--halt-on-error', '--fmt=' + fmtPath, '/document.tex'
+                    '--file-line-error', '--halt-on-error', '--synctex=-1', '--fmt=' + fmtPath, sourcePath
                 ]);
             } else {
                 result = Module.callMainWithRedirects([
                     'xelatex', '--no-shell-escape', '--interaction=nonstopmode',
-                    '--halt-on-error', '--no-pdf',
+                    '--file-line-error', '--halt-on-error', '--synctex=-1', '--no-pdf',
                     '--fmt=/texlive/texmf-dist/texmf-var/web2c/xetex/xelatex.fmt',
-                    '/document.tex'
+                    sourcePath
                 ]);
                 if (result.exit_code === 0) {
                     result = Module.callMainWithRedirects([
-                        'xdvipdfmx', '-o', '/document.pdf', '/document.xdv'
+                        'xdvipdfmx', '-o', docBase + '.pdf', docBase + '.xdv'
                     ]);
                 }
             }
 
+            const _pCallEnd = performance.now();
+            if (verboseLogging) {
+                workerLog(`[PERF] module=${(_pModuleEnd - _pModuleStart).toFixed(0)}ms reset=${(_pResetEnd - _pModuleEnd).toFixed(0)}ms mount=${(_pMountEnd - _pResetEnd).toFixed(0)}ms finalize=${(_pFinalizeEnd - _pMountEnd).toFixed(0)}ms callMain=${(_pCallEnd - _pCallStart).toFixed(0)}ms`);
+            }
+
             lastExitCode = result.exit_code;
+            // Emscripten redirects can omit TeX diagnostics from stdout; the .log is authoritative.
+            try { texLog = FS.readFile(docBase + '.log', { encoding: 'utf8' }); }
+            catch { texLog = [result.stdout, result.stderr].filter(Boolean).join('\n'); }
+            if (result.exit_code !== 0) {
+                const fileDiagnostic = texLog.match(/^(.+?):(\d+):\s*(.+)$/m);
+                const diagnostic = texLog.match(/^!\s*(.+)$/m)?.[1];
+                const line = texLog.match(/^l\.(\d+)\s*(.*)$/m);
+                compileError = fileDiagnostic
+                    ? `${fileDiagnostic[1]}:${fileDiagnostic[2]}: ${fileDiagnostic[3]}`
+                    : diagnostic ? `${sourcePath}${line ? ':' + line[1] : ''}: ${diagnostic}${line?.[2] ? ' ' + line[2] : ''}`
+                    : `TeX compilation failed for ${sourcePath} (exit code ${result.exit_code})`;
+            }
 
             if (result.exit_code === 0) {
                 try {
-                    pdfData = FS.readFile('/document.pdf');
+                    pdfData = FS.readFile(docBase + '.pdf');
                     compileSuccess = true;
                     workerLog('Compilation successful!');
+
+                    // Read SyncTeX data for source/PDF synchronization
+                    // --synctex=-1 generates uncompressed .synctex file
+                    try {
+                        const syncTexBytes = FS.readFile(docBase + '.synctex');
+                        syncTexData = new TextDecoder().decode(syncTexBytes);
+                        workerLog(`SyncTeX data: ${(syncTexBytes.byteLength / 1024).toFixed(1)}KB`);
+                    } catch (e) {
+                        workerLog('No SyncTeX file generated');
+                    }
+
+                    // A successful first TeX pass can still contain unresolved citations.
+                    // BibTeX must run before two further TeX passes can resolve them.
+                    let bibliographyPasses = 0;
+                    try {
+                        if (FS.stat(docBase + '.bcf') && !accumulatedCtanFiles.has(docBase + '.bbl')) {
+                            throw new Error('This document requires Biber, which is not bundled. Use biblatex with backend=bibtex, or supply a generated .bbl file.');
+                        }
+                    } catch (error) { if (!error.errno) throw error; }
+                    const firstAux = collectAuxFiles(FS);
+                    const bibliographyAux = Object.values(firstAux).join('\n');
+                    if (/\\bibdata\{/.test(bibliographyAux) && /\\bibstyle\{/.test(bibliographyAux)) {
+                        const styleBundles = new Set(['bibtex']);
+                        for (const match of bibliographyAux.matchAll(/\\bibstyle\{([^}]+)\}/g)) {
+                            const style = Object.entries(fileManifest).find(([path]) => path.endsWith('/' + match[1] + '.bst'))?.[1];
+                            if (style?.bundle) styleBundles.add(style.bundle);
+                        }
+                        for (const name of styleBundles) if (!bundleDataMap.has(name)) {
+                            const bundle = await requestBundleFetch(name);
+                            if (!bundle.success) throw new Error('Could not load the BibTeX styles bundle.');
+                            bundleDataMap.set(name, bundle.bundleData);
+                            if (bundle.bundleMeta) bundleMetaMap.set(name, bundle.bundleMeta);
+                        }
+                        await resetForPass(firstAux);
+                        workerProgress('compile', 'Building bibliography…');
+                        workerLog('Running BibTeX…');
+                        const bib = Module.callMainWithRedirects(['bibtex8', '--8bit', docBase.slice(docBase.lastIndexOf('/') + 1)]);
+                        let bibLog = [bib.stdout, bib.stderr].filter(Boolean).join('\n');
+                        try { bibLog = FS.readFile(docBase + '.blg', { encoding: 'utf8' }); } catch {}
+                        if (bib.exit_code !== 0) {
+                            lastExitCode = bib.exit_code;
+                            texLog += '\n' + bibLog;
+                            throw new Error('BibTeX failed: ' + (bibLog.match(/^(?:I couldn.t|I found no|.*---line).*$/m)?.[0] || 'check the bibliography file and full log.'));
+                        }
+                        try { FS.readFile(docBase + '.bbl'); }
+                        catch { throw new Error('BibTeX did not produce a bibliography (.bbl).'); }
+                        workerLog('BibTeX completed.');
+                        bibliographyPasses = 2;
+                        maxRerunPasses = Math.max(maxRerunPasses, rerunPass + 2);
+                    }
+
+                    // Auto-rerun loop for cross-references/TOC
+                    // LaTeX needs multiple passes to resolve forward references
+                    // Regex for rerun detection (single pass through log, case-insensitive)
+                    const rerunPattern = /Rerun to get|Label\(s\) may have changed|There were undefined references|Rerun LaTeX/i;
+
+                    // Track aux files via hash for faster comparison
+                    let prevAuxHash = cachedAuxFiles ? hashAuxFiles(cachedAuxFiles) : 0;
+                    let prevAuxFiles = cachedAuxFiles || {};
+
+                    while (rerunPass < maxRerunPasses) {
+                        // Check if log suggests rerun is needed
+                        let logSaysRerun = false;
+                        try {
+                            const logContent = FS.readFile(docBase + '.log', { encoding: 'utf8' });
+                            logSaysRerun = rerunPattern.test(logContent);
+                        } catch (e) {}
+
+                        if (!logSaysRerun && bibliographyPasses === 0) break;
+
+                        // Collect current aux files and compare hash with previous pass
+                        // If hash is identical, the "Rerun" warning is a false positive
+                        const currentAuxFiles = collectAuxFiles(FS);
+                        const currentAuxHash = hashAuxFiles(currentAuxFiles);
+
+                        if (currentAuxHash === prevAuxHash && bibliographyPasses === 0) {
+                            workerLog('Aux hash unchanged, skipping unnecessary rerun');
+                            break;
+                        }
+
+                        prevAuxHash = currentAuxHash;
+
+                        prevAuxFiles = currentAuxFiles;
+
+                        rerunPass++;
+                        workerLog(`Auto-rerun pass ${rerunPass}/${maxRerunPasses}: resolving cross-references...`);
+                        workerProgress('compile', `Rerun ${rerunPass}/${maxRerunPasses}...`);
+
+                        // IMPORTANT: pdfTeX has internal C globals (glyph_unicode_tree, etc.) that
+                        // don't reset between invocations, causing assertion failures. We MUST
+                        // create a fresh WASM module for each rerun pass.
+
+                        // Use aux files we already collected for comparison
+                        const rerunAuxFiles = prevAuxFiles;
+
+                        await resetForPass(rerunAuxFiles);
+                        if (bibliographyPasses > 0) bibliographyPasses--;
+
+                        // Rewrite document source
+                        FS.writeFile(sourcePath, docSource);
+
+                        // Mount custom format if used
+                        if (fmtPath === '/custom.fmt' && cachedFormat?.fmtData?.buffer?.byteLength > 0) {
+                            FS.writeFile('/custom.fmt', cachedFormat.fmtData);
+                            // Re-restore preamble side-effect files in case the rerun
+                            // rebuilt the VFS (the cached format skips the preamble that
+                            // would otherwise regenerate them).
+                            restoreSideEffectFiles(FS, cachedFormat.sideEffectFiles);
+                        }
+
+                        // Run compilation (use same format path as initial compilation)
+                        let rerunResult;
+                        if (engine === 'pdflatex') {
+                            rerunResult = Module.callMainWithRedirects([
+                                'pdflatex', '--no-shell-escape', '--interaction=nonstopmode',
+                                '--file-line-error', '--halt-on-error', '--synctex=-1', '--fmt=' + fmtPath, sourcePath
+                            ]);
+                        } else {
+                            // XeLaTeX: two-step process (xelatex -> xdvipdfmx)
+                            rerunResult = Module.callMainWithRedirects([
+                                'xelatex', '--no-shell-escape', '--interaction=nonstopmode',
+                                '--file-line-error', '--halt-on-error', '--synctex=-1', '--no-pdf',
+                                '--fmt=' + fmtPath, sourcePath
+                            ]);
+                            if (rerunResult.exit_code === 0) {
+                                rerunResult = Module.callMainWithRedirects([
+                                    'xdvipdfmx', '-o', docBase + '.pdf', docBase + '.xdv'
+                                ]);
+                            }
+                        }
+
+                        if (rerunResult.exit_code === 0) {
+                            pdfData = FS.readFile(docBase + '.pdf');
+                            // Reflect the final pass in the returned log: the first-pass
+                            // transcript still contains the (now-resolved) "undefined
+                            // references" warning, which would otherwise surface as a
+                            // spurious warning in the UI and mask convergence.
+                            try { texLog = FS.readFile(docBase + '.log', { encoding: 'utf8' }); }
+                            catch { texLog = rerunResult.stdout || texLog; }
+                            lastExitCode = rerunResult.exit_code;
+                            workerLog(`Rerun ${rerunPass} successful`);
+                            // Update SyncTeX data
+                            try {
+                                const syncTexBytes = FS.readFile(docBase + '.synctex');
+                                syncTexData = new TextDecoder().decode(syncTexBytes);
+                            } catch (e) {}
+                        } else {
+                            lastExitCode = rerunResult.exit_code;
+                            try { texLog = FS.readFile(docBase + '.log', { encoding: 'utf8' }); } catch {}
+                            throw new Error(`TeX rerun ${rerunPass} failed; check the full compiler log.`);
+                        }
+                    }
+
+                    // Log summary if reruns occurred
+                    if (rerunPass > 0) {
+                        workerLog(`Completed ${rerunPass + 1} passes (1 initial + ${rerunPass} reruns)`);
+                    }
                 } catch (e) {
-                    workerLog('Failed to read PDF: ' + e.message);
+                    compileSuccess = false;
+                    pdfData = null;
+                    compileError = e.message;
+                    texLog += '\n! ' + e.message;
+                    workerLog('Compilation failed: ' + e.message);
                 }
             }
 
             // Handle missing files and deferred bundles
             if (!compileSuccess) {
-                // First, check for individual file Range requests (more efficient than full bundle)
+                // Check for individual file Range requests from deferred bundles
                 const pendingFiles = vfs.getPendingDeferredFiles();
                 if (pendingFiles.length > 0) {
-                    workerLog(`Fetching ${pendingFiles.length} individual files via Range requests...`);
+                    // Group pending files by bundle
+                    const filesByBundle = new Map();
+                    for (const f of pendingFiles) {
+                        if (!filesByBundle.has(f.bundleName)) filesByBundle.set(f.bundleName, []);
+                        filesByBundle.get(f.bundleName).push(f);
+                    }
+
                     let fetchedAny = false;
-                    for (const fileReq of pendingFiles) {
-                        try {
-                            const fileResult = await requestFileRangeFetch(fileReq.bundleName, fileReq.start, fileReq.end);
-                            if (fileResult.success) {
-                                vfs.storeFetchedFile(fileReq.bundleName, fileReq.start, fileReq.end, fileResult.data);
-                                fetchedAny = true;
-                                workerLog(`Loaded file bytes [${fileReq.start}:${fileReq.end}] (${fileResult.data.length} bytes)`);
+
+                    // For each bundle with pending files, decide: full bundle fetch or Range requests
+                    for (const [bundleName, files] of filesByBundle) {
+                        // If bundle is deferred (not yet loaded), consider loading the whole thing
+                        // This is more efficient when many files are needed from the same bundle
+                        if (deferredBundles.has(bundleName) && !bundleDataMap.has(bundleName)) {
+                            workerLog(`Deferred ${bundleName}: ${files.length} files requested - loading full bundle`);
+                            try {
+                                const bundleResult = await requestBundleFetch(bundleName);
+                                if (bundleResult.success) {
+                                    bundleDataMap.set(bundleName, bundleResult.bundleData);
+                                    if (bundleResult.bundleMeta) {
+                                        bundleMetaMap.set(bundleName, bundleResult.bundleMeta);
+                                    }
+                                    deferredBundles.delete(bundleName);
+                                    workerLog(`Loaded full ${bundleName} bundle (${(bundleResult.bundleData.byteLength / 1024 / 1024).toFixed(1)}MB)`);
+                                    fetchedAny = true;
+                                    continue; // Skip Range requests for this bundle
+                                }
+                            } catch (e) {
+                                workerLog(`Failed to load ${bundleName} bundle: ${e.message}, trying Range requests`);
                             }
-                        } catch (e) {
-                            workerLog(`Failed to fetch file range: ${e.message}`);
+                        }
+
+                        // Use parallel Range requests for files from already-loaded bundles or if full fetch failed
+                        workerLog(`Fetching ${files.length} files from ${bundleName} via parallel Range requests...`);
+                        const rangePromises = files.map(async (fileReq) => {
+                            try {
+                                const fileResult = await requestFileRangeFetch(fileReq.bundleName, fileReq.start, fileReq.end);
+                                if (fileResult.success) {
+                                    vfs.storeFetchedFile(fileReq.bundleName, fileReq.start, fileReq.end, fileResult.data);
+                                    return true;
+                                }
+                            } catch (e) {
+                                workerLog(`Failed to fetch file range [${fileReq.start}:${fileReq.end}]: ${e.message}`);
+                            }
+                            return false;
+                        });
+                        const results = await Promise.all(rangePromises);
+                        const successCount = results.filter(Boolean).length;
+                        if (successCount > 0) {
+                            workerLog(`Loaded ${successCount}/${files.length} files from ${bundleName}`);
+                            fetchedAny = true;
                         }
                     }
+
                     if (fetchedAny) {
                         retryCount++;
                         continue;
@@ -1059,52 +2272,197 @@ async function handleCompile(request) {
                 }
 
                 // Then check for missing files via log parsing (CTAN fallback)
+                workerLog(`[RETRY] enableCtan=${options.enableCtan}`);
                 if (options.enableCtan) {
                     let logContent = '';
-                    try { logContent = new TextDecoder().decode(FS.readFile('/document.log')); } catch (e) {}
+                    try { logContent = new TextDecoder().decode(FS.readFile(docBase + '.log')); } catch (e) {}
                     const allOutput = logContent + ' ' + (result.stdout || '') + ' ' + (result.stderr || '');
-                    const missingFile = extractMissingFile(allOutput, fetchedPackages);
 
-                    if (missingFile) {
-                        const pkgName = getPackageFromFile(missingFile);
+                    // Extract ALL missing files for parallel fetching
+                    const missingFiles = extractAllMissingFiles(allOutput, fetchedPackages);
+                    workerLog(`[RETRY] missingFiles=${missingFiles.length > 0 ? missingFiles.join(', ') : 'none'}`);
 
-                        // Try bundle first (compressed, fast)
-                        const bundleName = packageMap?.[pkgName];
-                        if (bundleName && !bundleDataMap.has(bundleName)) {
+                    if (missingFiles.length > 0) {
+                        // Categorize packages: bundles vs CTAN
+                        const bundlesToFetch = [];
+                        const ctanToFetch = [];
+
+                        for (const missingFile of missingFiles) {
+                            const pkgName = getPackageFromFile(missingFile);
+
+                            // Prefer the authoritative manifest lookup: a missing
+                            // .sty/.cls/.def/etc. is routed to the bundle that
+                            // actually ships it (e.g. pdftex.def → "graphics").
+                            // getPackageFromFile() only strips the extension, which
+                            // mis-attributes files whose basename ≠ their package
+                            // (pdftex.def is in package graphics-def, not "pdftex").
+                            const basename = missingFile.substring(missingFile.lastIndexOf('/') + 1);
+                            // Check if pkgName is already a bundle name (from font index lookup)
+                            // or if it maps to a bundle via packageMap
+                            let bundleName = docFileToBundle?.get(basename)
+                                || (bundleRegistry?.has(pkgName) ? pkgName : packageMap?.[pkgName]);
+
+                            if (bundleName && !bundleDataMap.has(bundleName)) {
+                                bundlesToFetch.push({ missingFile, pkgName, bundleName });
+                            } else if (!bundleName) {
+                                ctanToFetch.push({ missingFile, pkgName });
+                            }
+                        }
+
+                        workerLog(`[RETRY] Fetching ${bundlesToFetch.length} bundles, ${ctanToFetch.length} CTAN packages in parallel`);
+
+                        // Fetch all bundles in parallel
+                        const bundlePromises = bundlesToFetch.map(async ({ missingFile, pkgName, bundleName }) => {
                             workerLog(`Missing: ${missingFile}, loading bundle ${bundleName}...`);
                             try {
                                 const bundleResult = await requestBundleFetch(bundleName);
                                 if (bundleResult.success) {
-                                    fetchedPackages.add(pkgName);
-                                    bundleDataMap.set(bundleName, bundleResult.bundleData);
-                                    if (bundleResult.bundleMeta) {
-                                        bundleMetaMap.set(bundleName, bundleResult.bundleMeta);
-                                    }
-                                    retryCount++;
-                                    continue;
+                                    return { type: 'bundle', pkgName, bundleName, data: bundleResult };
                                 }
                             } catch (e) {
-                                workerLog(`Bundle fetch failed: ${e.message}, trying CTAN...`);
+                                workerLog(`Bundle fetch failed for ${bundleName}: ${e.message}`);
                             }
-                        }
+                            return null;
+                        });
 
-                        // Fall back to CTAN
-                        workerLog(`Missing: ${missingFile}, fetching ${pkgName} from CTAN...`);
-                        try {
-                            const ctanData = await requestCtanFetch(pkgName);
-                            if (ctanData.success) {
-                                fetchedPackages.add(pkgName);
-                                const files = ctanData.files instanceof Map ? ctanData.files : new Map(Object.entries(ctanData.files));
+                        // Fetch all CTAN packages in parallel
+                        // Use version preference if set (for kernel incompatibility fallback)
+                        const ctanPromises = ctanToFetch.map(async ({ missingFile, pkgName }) => {
+                            const tlYear = packageTLVersions.get(pkgName) || null;
+                            const yearLabel = tlYear ? ` (TL${tlYear})` : '';
+                            workerLog(`Missing: ${missingFile}, fetching ${pkgName}${yearLabel} from CTAN...`);
+                            try {
+                                const ctanData = await requestCtanFetch(pkgName, missingFile, tlYear);
+                                if (ctanData.success) {
+                                    return { type: 'ctan', pkgName, data: ctanData };
+                                }
+                            } catch (e) {
+                                workerLog(`CTAN fetch failed for ${pkgName}: ${e.message}`);
+                            }
+                            return null;
+                        });
+
+                        // Wait for all fetches to complete
+                        const allResults = await Promise.all([...bundlePromises, ...ctanPromises]);
+                        let fetchedAny = false;
+
+                        for (const result of allResults) {
+                            if (!result) continue;
+                            fetchedAny = true;
+
+                            if (result.type === 'bundle') {
+                                fetchedPackages.add(result.pkgName);
+                                bundleDataMap.set(result.bundleName, result.data.bundleData);
+                                if (result.data.bundleMeta) {
+                                    bundleMetaMap.set(result.bundleName, result.data.bundleMeta);
+                                }
+                            } else if (result.type === 'ctan') {
+                                fetchedPackages.add(result.pkgName);
+                                const files = result.data.files instanceof Map
+                                    ? result.data.files
+                                    : new Map(Object.entries(result.data.files));
                                 for (const [path, content] of files) {
                                     accumulatedCtanFiles.set(path, content);
                                 }
+                            }
+                        }
+
+                        if (fetchedAny) {
+                            retryCount++;
+                            continue;
+                        }
+                    }
+
+                    // Check for undefined control sequences
+                    const undefinedCmds = extractUndefinedCommands(allOutput);
+
+                    // FIRST: Check for kernel incompatibility - try older package versions
+                    // Version fallback works for ALL packages, including bundle packages
+                    // (CTAN fetch with older version will override the bundle version)
+                    if (undefinedCmds.size > 0) {
+                        const incompatiblePkgs = detectKernelIncompatibility(allOutput, undefinedCmds);
+
+                        if (incompatiblePkgs.size > 0) {
+                            let needsVersionFallback = false;
+
+                            for (const pkgName of incompatiblePkgs) {
+                                // Get current TL year for this package (default to 2026)
+                                const currentYear = packageTLVersions.get(pkgName) || DEFAULT_TL_YEAR;
+                                const yearIndex = SUPPORTED_TL_YEARS.indexOf(currentYear);
+
+                                // Try next older year if available
+                                if (yearIndex < SUPPORTED_TL_YEARS.length - 1) {
+                                    const olderYear = SUPPORTED_TL_YEARS[yearIndex + 1];
+                                    packageTLVersions.set(pkgName, olderYear);
+
+                                    // Note if this is a bundle package - CTAN fetch will override it
+                                    const bundleName = packageMap?.[pkgName];
+                                    if (bundleName) {
+                                        workerLog(`[VERSION FALLBACK] ${pkgName}: in bundle "${bundleName}", fetching TL${olderYear} from CTAN to override`);
+                                    } else {
+                                        workerLog(`[VERSION FALLBACK] ${pkgName}: trying TL${olderYear} instead of TL${currentYear}`);
+                                    }
+                                    needsVersionFallback = true;
+
+                                    // Remove the package from fetched so it gets re-fetched with older version
+                                    fetchedPackages.delete(pkgName);
+
+                                    // Remove any files from this package from accumulatedCtanFiles
+                                    for (const [path, _] of accumulatedCtanFiles) {
+                                        if (path.includes(`/${pkgName}/`) || path.includes(`/${pkgName}.`)) {
+                                            accumulatedCtanFiles.delete(path);
+                                        }
+                                    }
+                                } else {
+                                    workerLog(`[VERSION FALLBACK] ${pkgName}: exhausted all TL versions (2026→2025→2024→2023), preserving the TeX error`);
+                                }
+                            }
+
+                            if (needsVersionFallback) {
+                                // Actively fetch older versions for packages that need them
+                                // This is needed because bundle packages already have files mounted
+                                const versionFetchPromises = [];
+                                for (const pkgName of incompatiblePkgs) {
+                                    const tlYear = packageTLVersions.get(pkgName);
+                                    if (tlYear && tlYear !== DEFAULT_TL_YEAR) {
+                                        workerLog(`[VERSION FALLBACK] Fetching ${pkgName} from TL${tlYear}...`);
+                                        versionFetchPromises.push(
+                                            requestCtanFetch(pkgName, `${pkgName}.sty`, tlYear)
+                                                .then(ctanData => {
+                                                    if (ctanData.success) {
+                                                        fetchedPackages.add(pkgName);
+                                                        const files = ctanData.files instanceof Map
+                                                            ? ctanData.files
+                                                            : new Map(Object.entries(ctanData.files));
+                                                        for (const [path, content] of files) {
+                                                            accumulatedCtanFiles.set(path, content);
+                                                        }
+                                                        workerLog(`[VERSION FALLBACK] Got ${files.size} files for ${pkgName} from TL${tlYear}`);
+                                                        return true;
+                                                    }
+                                                    return false;
+                                                })
+                                                .catch(e => {
+                                                    workerLog(`[VERSION FALLBACK] Failed to fetch ${pkgName} from TL${tlYear}: ${e.message}`);
+                                                    return false;
+                                                })
+                                        );
+                                    }
+                                }
+
+                                if (versionFetchPromises.length > 0) {
+                                    await Promise.all(versionFetchPromises);
+                                }
+
                                 retryCount++;
                                 continue;
                             }
-                        } catch (e) {
-                            workerLog(`CTAN fetch failed: ${e.message}`);
                         }
                     }
+
+                    // Undefined user commands are source errors. Never invent no-op macros
+                    // or retry unchanged source merely to suppress the diagnostic.
+
                 }
             }
 
@@ -1112,6 +2470,7 @@ async function handleCompile(request) {
             if (!compileSuccess) break;
 
         } catch (e) {
+            compileError = e.message;
             workerLog(`Error: ${e.message}`);
             break;
         }
@@ -1121,22 +2480,58 @@ async function handleCompile(request) {
     const totalTime = performance.now() - totalStart;
     workerLog(`Total time: ${totalTime.toFixed(0)}ms`);
 
-    const transferables = pdfData ? [pdfData.buffer] : [];
+    // NOTE: Memory snapshot capture is DISABLED
+    // pdfTeX's internal C globals (glyph_unicode_tree) cause assertion failures when
+    // we try to restore a post-compilation snapshot. Fast recompiles come from format
+    // caching (.fmt files with pre-compiled preambles) instead.
+
+    // Sample WASM memory size BEFORE clearing Module reference
+    // This is the primary metric: measures WebAssembly.Memory directly,
+    // which V8 cannot GC (the root cause of the memory leak).
+    // Works in ALL browsers (standard ArrayBuffer.byteLength).
+    let wasmMemoryBytes = 0;
+    try {
+        // Emscripten exposes WASM memory as Module.HEAPU8 (Uint8Array view)
+        // Also try Module.wasmMemory for alternative Emscripten configs
+        const buf = Module?.HEAPU8?.buffer || Module?.wasmMemory?.buffer;
+        if (buf) wasmMemoryBytes = buf.byteLength;
+    } catch (e) { /* defensive */ }
+
+    // Module cleanup happens in getOrCreateModule() before next compile
+    // Just clear local references here
+    Module = null;
+    FS = null;
+
+    // Build response message
+    const stats = {
+        compileTimeMs: totalTime,
+        bundlesUsed: [...bundleDataMap.keys()],
+        wasmHeapBytes: wasmMemoryBytes,
+        // Nested form expected by the perf gate / memory invariant (#5).
+        memory: { wasmHeapBytes: wasmMemoryBytes },
+    };
+
+    // Use transferable ArrayBuffer for PDF (NOT SharedArrayBuffer)
+    // SharedArrayBuffer causes memory leaks - V8 keeps SABs as "strong roots" even after
+    // worker termination, preventing GC. Transfer moves ownership cleanly.
     self.postMessage({
         type: 'compile-response',
         id,
         success: compileSuccess,
+        error: compileSuccess ? undefined : (compileError || `No PDF produced for ${sourcePath}`),
         pdfData: pdfData ? pdfData.buffer : null,
+        syncTexData,
         exitCode: lastExitCode,
         auxFilesToCache: auxFiles,
-        stats: { compileTimeMs: totalTime, bundlesUsed: [...bundleDataMap.keys()] }
-    }, transferables);
+        stats,
+        log: texLog,
+    }, pdfData ? [pdfData.buffer] : []);
 }
 
 // ============ Format Generation ============
 
 async function handleFormatGenerate(request) {
-    const { id, preambleContent, engine, manifest, packageMapData, bundleDepsData, bundleRegistryData, bundleData, ctanFiles } = request;
+    const { id, preambleContent, engine, manifest, packageMapData, bundleDepsData, bundleRegistryData, bundleData, bundleNames, bundlesUrl, ctanFiles, maxRetries: maxRetriesOption } = request;
 
     workerLog('=== Format Generation Started ===');
     const startTime = performance.now();
@@ -1146,8 +2541,30 @@ async function handleFormatGenerate(request) {
     bundleDeps = bundleDepsData;
     bundleRegistry = new Set(bundleRegistryData);
 
-    const bundleDataMap = bundleData instanceof Map ? bundleData : new Map(Object.entries(bundleData));
+    const bundleDataMap = new Map();
     const bundleMetaMap = new Map(); // Store bundle metadata for dynamically loaded bundles
+
+    // NEW: Load bundles from OPFS/network if names provided (worker-direct loading)
+    if (bundleNames && bundleNames.length > 0) {
+        workerLog(`Loading ${bundleNames.length} bundles (worker-direct)...`);
+        const effectiveUrl = bundlesUrl || workerBundlesUrl;
+
+        await Promise.all(bundleNames.map(async (name) => {
+            try {
+                const data = await loadBundleInWorker(name, effectiveUrl);
+                if (data) bundleDataMap.set(name, data);
+            } catch (e) {
+                workerLog(`Failed to load ${name}: ${e.message}`);
+            }
+        }));
+        workerLog(`Loaded ${bundleDataMap.size}/${bundleNames.length} bundles`);
+    }
+    // OLD: Backward compat - bundles sent directly in message (legacy path)
+    else if (bundleData) {
+        const data = bundleData instanceof Map ? bundleData : new Map(Object.entries(bundleData));
+        for (const [name, d] of data) bundleDataMap.set(name, d);
+    }
+
     const accumulatedCtanFiles = new Map();
 
     if (ctanFiles) {
@@ -1156,12 +2573,11 @@ async function handleFormatGenerate(request) {
     }
 
     let retryCount = 0;
-    const maxRetries = 10;
+    const maxRetries = maxRetriesOption ?? 15;  // Configurable, default 15
     const fetchedPackages = new Set();
 
     while (retryCount < maxRetries) {
         try {
-            // Get or create global WASM instance (reused to avoid memory leaks)
             const Module = await getOrCreateModule();
             const FS = Module.FS;
 
@@ -1181,7 +2597,17 @@ async function handleFormatGenerate(request) {
 
             vfs.finalize();
 
-            FS.writeFile('/myformat.ini', preambleContent + '\n\\dump\n');
+            // Apply kernel compat shim for format generation too
+            const shimmedPreamble = injectKernelCompatShim(preambleContent);
+            FS.writeFile('/myformat.ini', shimmedPreamble + '\n\\dump\n');
+
+            // Snapshot the working tree so we can detect files the preamble writes
+            // as a side effect during the dump (e.g. insdljs' .djs via \openout).
+            // These must travel with the cached format and be restored on reuse,
+            // since reusing the format skips the preamble that produced them.
+            // Recursive (not just root) so writes into subdirectories are caught;
+            // the mounted texmf tree and system dirs are pruned (see snapshot fn).
+            const filesBefore = snapshotWorkTree(FS);
 
             // Use the correct engine for format generation
             let formatArgs;
@@ -1204,54 +2630,109 @@ async function handleFormatGenerate(request) {
                 const formatData = FS.readFile('/myformat.fmt');
                 workerLog(`Format generated: ${(formatData.byteLength / 1024 / 1024).toFixed(1)}MB in ${(performance.now() - startTime).toFixed(0)}ms`);
 
+                // Collect any files the preamble created anywhere in the working
+                // tree, excluding the format job's own outputs (myformat.*). Keyed
+                // by absolute path so subdirectory writes round-trip faithfully.
+                const sideEffectFiles = {};
+                const transfer = [formatData.buffer];
+                for (const path of snapshotWorkTree(FS)) {
+                    if (filesBefore.has(path)) continue;
+                    if (path.replace(/^\//, '').startsWith('myformat.')) continue;
+                    try {
+                        const data = FS.readFile(path); // Uint8Array
+                        const buf = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+                        sideEffectFiles[path] = buf;
+                        transfer.push(buf);
+                    } catch (e) { /* skip unreadable */ }
+                }
+                if (Object.keys(sideEffectFiles).length > 0) {
+                    workerLog(`Captured ${Object.keys(sideEffectFiles).length} preamble side-effect file(s): ${Object.keys(sideEffectFiles).join(', ')}`);
+                }
+
                 self.postMessage({
-                    type: 'format-generate-response', id, success: true, formatData: formatData.buffer
-                }, [formatData.buffer]);
+                    type: 'format-generate-response', id, success: true, formatData: formatData.buffer, sideEffectFiles
+                }, transfer);
                 return;
             }
 
-            // Check for missing packages
+            // Check for missing packages - extract ALL and fetch in parallel
             let logContent = '';
             try { logContent = new TextDecoder().decode(FS.readFile('/myformat.log')); } catch (e) {}
             const allOutput = logContent + ' ' + (result.stdout || '') + ' ' + (result.stderr || '');
-            const missingFile = extractMissingFile(allOutput, fetchedPackages);
+            const missingFiles = extractAllMissingFiles(allOutput, fetchedPackages);
 
-            if (missingFile) {
-                const pkgName = getPackageFromFile(missingFile);
+            if (missingFiles.length > 0) {
+                workerLog(`[FORMAT] Missing ${missingFiles.length} packages: ${missingFiles.join(', ')}`);
 
-                // Try bundle first
-                const bundleName = packageMap?.[pkgName];
-                if (bundleName && !bundleDataMap.has(bundleName)) {
+                // Categorize packages: bundles vs CTAN
+                const bundlesToFetch = [];
+                const ctanToFetch = [];
+
+                for (const missingFile of missingFiles) {
+                    const pkgName = getPackageFromFile(missingFile);
+                    const bundleName = packageMap?.[pkgName];
+
+                    if (bundleName && !bundleDataMap.has(bundleName)) {
+                        bundlesToFetch.push({ missingFile, pkgName, bundleName });
+                    } else if (!bundleName) {
+                        ctanToFetch.push({ missingFile, pkgName });
+                    }
+                }
+
+                // Fetch all in parallel
+                const bundlePromises = bundlesToFetch.map(async ({ missingFile, pkgName, bundleName }) => {
                     workerLog(`Format missing: ${missingFile}, loading bundle ${bundleName}...`);
                     try {
                         const bundleResult = await requestBundleFetch(bundleName);
                         if (bundleResult.success) {
-                            fetchedPackages.add(pkgName);
-                            bundleDataMap.set(bundleName, bundleResult.bundleData);
-                            if (bundleResult.bundleMeta) {
-                                bundleMetaMap.set(bundleName, bundleResult.bundleMeta);
-                            }
-                            retryCount++;
-                            continue;
+                            return { type: 'bundle', pkgName, bundleName, data: bundleResult };
                         }
                     } catch (e) {
-                        workerLog(`Bundle fetch failed: ${e.message}, trying CTAN...`);
+                        workerLog(`Bundle fetch failed for ${bundleName}: ${e.message}`);
+                    }
+                    return null;
+                });
+
+                const ctanPromises = ctanToFetch.map(async ({ missingFile, pkgName }) => {
+                    workerLog(`Format missing: ${missingFile}, fetching ${pkgName} from CTAN...`);
+                    try {
+                        const ctanData = await requestCtanFetch(pkgName, missingFile);
+                        if (ctanData.success) {
+                            return { type: 'ctan', pkgName, data: ctanData };
+                        }
+                    } catch (e) {
+                        workerLog(`CTAN fetch failed for ${pkgName}: ${e.message}`);
+                    }
+                    return null;
+                });
+
+                const allResults = await Promise.all([...bundlePromises, ...ctanPromises]);
+                let fetchedAny = false;
+
+                for (const result of allResults) {
+                    if (!result) continue;
+                    fetchedAny = true;
+
+                    if (result.type === 'bundle') {
+                        fetchedPackages.add(result.pkgName);
+                        bundleDataMap.set(result.bundleName, result.data.bundleData);
+                        if (result.data.bundleMeta) {
+                            bundleMetaMap.set(result.bundleName, result.data.bundleMeta);
+                        }
+                    } else if (result.type === 'ctan') {
+                        fetchedPackages.add(result.pkgName);
+                        const files = result.data.files instanceof Map
+                            ? result.data.files
+                            : new Map(Object.entries(result.data.files));
+                        for (const [path, content] of files) {
+                            accumulatedCtanFiles.set(path, content);
+                        }
                     }
                 }
 
-                // Fall back to CTAN
-                workerLog(`Format missing: ${missingFile}, fetching ${pkgName} from CTAN...`);
-                try {
-                    const ctanData = await requestCtanFetch(pkgName);
-                    if (ctanData.success) {
-                        fetchedPackages.add(pkgName);
-                        const files = ctanData.files instanceof Map ? ctanData.files : new Map(Object.entries(ctanData.files));
-                        for (const [path, content] of files) accumulatedCtanFiles.set(path, content);
-                        retryCount++;
-                        continue;
-                    }
-                } catch (e) {
-                    workerLog(`CTAN fetch failed: ${e.message}`);
+                if (fetchedAny) {
+                    retryCount++;
+                    continue;
                 }
             }
 
@@ -1278,16 +2759,42 @@ self.onmessage = async function(e) {
 
     switch (msg.type) {
         case 'init':
-            // Compile WASM directly in worker to avoid 30MB duplication via postMessage
             busytexJsUrl = msg.busytexJsUrl;
+            verboseLogging = msg.verbose ?? false;
             if (msg.manifest) {
                 fileManifest = msg.manifest;
                 packageMap = msg.packageMapData;
                 bundleDeps = msg.bundleDepsData;
                 bundleRegistry = new Set(msg.bundleRegistryData || []);
+                // Pre-index manifest by bundle for O(1) lookup
+                ensureManifestIndexed(fileManifest);
             }
-
             cachedWasmModule = msg.wasmModule;
+
+            // Store bundlesUrl for worker-direct network fetches
+            workerBundlesUrl = msg.bundlesUrl || null;
+
+            // Detect OPFS capability (async, but don't block ready message)
+            detectWorkerOPFS().then(available => {
+                canUseWorkerOPFS = available;
+                workerLog(`Worker OPFS: ${canUseWorkerOPFS ? 'available' : 'not available (will use main thread)'}`);
+            });
+
+            // Eagerly pre-instantiate WASM module in background.
+            // First compile will reuse this instead of paying ~150ms for instantiation.
+            // getOrCreateModule() awaits globalModulePromise if a compile arrives before this finishes.
+            globalModulePromise = initBusyTeX(cachedWasmModule, busytexJsUrl, null)
+                .then(mod => {
+                    globalModule = mod;
+                    globalModuleUsed = false;
+                    globalModulePromise = null;
+                    workerLog('[MEMORY] WASM module pre-instantiated');
+                })
+                .catch(e => {
+                    globalModulePromise = null;
+                    workerLog('[MEMORY] WASM pre-instantiation failed (will retry on compile): ' + e.message);
+                });
+
             self.postMessage({ type: 'ready' });
             break;
 
@@ -1295,6 +2802,13 @@ self.onmessage = async function(e) {
             // Queue compile operations to prevent concurrent execution
             operationQueue = operationQueue.then(() => handleCompile(msg)).catch(e => {
                 workerLog(`Compile queue error: ${e.message}`);
+                // IMPORTANT: Send error response so main thread doesn't hang
+                self.postMessage({
+                    type: 'compile-response',
+                    id: msg.id,
+                    success: false,
+                    error: e.message,
+                });
             });
             break;
 
@@ -1302,6 +2816,13 @@ self.onmessage = async function(e) {
             // Queue format operations to prevent concurrent execution
             operationQueue = operationQueue.then(() => handleFormatGenerate(msg)).catch(e => {
                 workerLog(`Format queue error: ${e.message}`);
+                // IMPORTANT: Send error response so main thread doesn't hang
+                self.postMessage({
+                    type: 'format-generate-response',
+                    id: msg.id,
+                    success: false,
+                    error: e.message,
+                });
             });
             break;
 
@@ -1330,6 +2851,20 @@ self.onmessage = async function(e) {
                 if (msg.success) pendingFileRange.resolve(msg);
                 else pendingFileRange.reject(new Error(msg.error || 'File range fetch failed'));
             }
+            break;
+
+        case 'cleanup':
+            // Release caches to free memory when compiler is idle
+            // Bundles will be re-read from OPFS on next compile
+            workerBundleCache.clear();
+            globalFetchedFilesCache.clear();
+            globalFinalizeCache.clear();
+            if (globalModule) {
+                destroyModule(globalModule);
+                globalModule = null;
+                globalModuleUsed = false;
+            }
+            workerLog('[MEMORY] Caches cleared');
             break;
     }
 };

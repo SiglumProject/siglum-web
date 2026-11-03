@@ -21,29 +21,31 @@
 
   /* Text - neutral warm scale (no tan/brown hues) */
   --color-text: #E8E4DC;
-  --color-text-secondary: #9A9590;
-  --color-text-muted: #6B6660;
+  --color-text-secondary: #BDB7B0;
+  --color-text-muted: #AAA39B;
 
   /* Borders */
-  --color-border: rgba(255, 255, 255, 0.08);
-  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-border: rgba(217, 119, 87, 0.24);
+  --color-border-subtle: rgba(232, 227, 211, 0.16);
 
-  /* Accent - muted copper (used sparingly) */
-  --color-accent: #B5856A;
-  --color-accent-hover: #C9997E;
-  --color-accent-subtle: rgba(181, 133, 106, 0.15);
-  --color-accent-bg: rgba(181, 133, 106, 0.10);
+  /* Accent - vibrant terracotta (used sparingly) */
+  --color-accent: #D97757;
+  --color-accent-hover: #E89B7E;
+  --color-accent-subtle: rgba(217, 119, 87, 0.15);
+  --color-accent-bg: rgba(217, 119, 87, 0.10);
 
   /* Shadows */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
   --shadow-xl: 0 20px 60px rgba(0, 0, 0, 0.5);
-  --glow-accent: 0 0 20px rgba(181, 133, 106, 0.15);
+  --glow-accent: 0 0 20px rgba(217, 119, 87, 0.15);
 
   /* Typography */
-  --font-display: -apple-system, BlinkMacSystemFont, 'SF Pro Display', system-ui, sans-serif;
-  --font-body: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  --font-mono: 'Commit Mono', 'SF Mono', 'Cascadia Code', monospace;
+  --font-serif: 'Crimson Pro', Georgia, serif;
+  --font-display: 'DM Serif Display', Georgia, serif;
+  --font-body: 'Commit Mono', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 
   /* Legacy aliases - for existing components */
   --color-base: var(--color-bg);
@@ -56,8 +58,8 @@
   --color-accent-primary: var(--color-accent);
   --color-accent-light: var(--color-accent-hover);
   --color-accent-muted: var(--color-accent-hover);
-  --color-accent-dim: #8A6550;
-  --color-accent-bg-hover: rgba(181, 133, 106, 0.18);
+  --color-accent-dim: #A05540;
+  --color-accent-bg-hover: rgba(217, 119, 87, 0.18);
   --color-border-accent: var(--color-accent-subtle);
 }
 
@@ -79,4 +81,9 @@ body {
 #root {
   width: 100%;
   height: 100vh;
+}
+
+button:focus-visible, a:focus-visible, summary:focus-visible {
+  outline: 2px solid var(--color-accent-hover);
+  outline-offset: 3px;
 }

@@ -4,7 +4,10 @@
   "private": true,
   "workspaces": [
     "app",
-    "worker"
+    "worker",
+    "../../siglum-engine",
+    "../../siglum-filesystem",
+    "../../siglum-git"
   ],
   "scripts": {
     "dev": "cd app && bun run dev",
@@ -12,9 +15,31 @@
     "build": "cd app && bun run build",
     "deploy:pages": "cd app && bun run build && wrangler pages deploy dist",
     "deploy:worker": "cd worker && wrangler deploy",
-    "upload:r2": "cd worker && ./upload-to-r2.sh"
+    "upload:r2": "cd worker && ./upload-to-r2.sh",
+    "dev:all": "bun scripts/local-workspace.ts start",
+    "check:all": "bun scripts/local-workspace.ts check",
+    "build:local": "cd app && bun run build:local",
+    "prepare:local": "bun scripts/local-workspace.ts prepare",
+    "snapshot:local": "python3 scripts/snapshot-local.py",
+    "dev:lan": "bun scripts/local-workspace.ts start-lan",
+    "test:mobile-pdf": "node scripts/test-mobile-pdf.mjs",
+    "test:mobile-insert": "node scripts/test-mobile-insert.mjs",
+    "test:mobile-lens": "node scripts/test-mobile-lens.mjs",
+    "prepare:release": "bun scripts/prepare-release.ts",
+    "preview:release": "bun scripts/preview-release.ts",
+    "test:release": "node scripts/test-release.mjs",
+    "test:compile-queue": "node scripts/test-compile-queue.mjs",
+    "test:citation-compile": "node scripts/test-citation-compile.mjs",
+    "test:selection-menu": "node scripts/test-selection-menu.mjs",
+    "test:keyboard-shortcuts": "node scripts/test-keyboard-shortcuts.mjs",
+    "test:session-recovery": "node scripts/test-session-recovery.mjs"
   },
   "devDependencies": {
-    "typescript": "~5.6.0"
-  }
+    "typescript": "~5.6.0",
+    "vite-plugin-wasm": "^3.5.0"
+  },
+  "dependencies": {
+    "@siglum/filesystem": "workspace:*"
+  },
+  "packageManager": "bun@1.3.4"
 }

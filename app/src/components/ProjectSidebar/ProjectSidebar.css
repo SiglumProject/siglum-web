@@ -1,10 +1,14 @@
 .project-sidebar {
   position: relative;
+  z-index: 1;
   height: 100%;
   display: flex;
   flex-shrink: 0;
-  background: var(--color-base);
-  border-right: 1px solid var(--color-border);
+  background: rgba(26, 22, 20, 0.65);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: inset 0 1px 0 rgba(232, 227, 211, 0.03);
+  border-right: 1px solid rgba(232, 227, 211, 0.08);
   box-sizing: border-box;
 }
 
@@ -32,18 +36,18 @@
 
 .sidebar-resize-handle:hover::before {
   background: var(--color-accent);
-  box-shadow: 0 0 8px rgba(181, 133, 106, 0.3);
+  box-shadow: 0 0 8px rgba(217, 119, 87, 0.3);
 }
 
 /* External file drag over */
 .project-sidebar.drag-over {
-  background: rgba(184, 149, 110, 0.03);
+  background: rgba(217, 119, 87, 0.03);
 }
 
 .project-sidebar.drag-over .sidebar-files {
-  background: rgba(184, 149, 110, 0.02);
+  background: rgba(217, 119, 87, 0.02);
   border-radius: 8px;
-  outline: 1px dashed rgba(184, 149, 110, 0.3);
+  outline: 1px dashed rgba(217, 119, 87, 0.3);
   outline-offset: -4px;
 }
 
@@ -89,12 +93,12 @@
   padding-top: 9px;
   transition: all 0.2s ease;
   z-index: 10;
-  background: var(--color-base-darker);
+  background: rgba(26, 22, 20, 0.5);
   box-sizing: border-box;
 }
 
 .sidebar-collapsed-zone:hover {
-  background: var(--color-base-lighter);
+  background: rgba(34, 31, 28, 0.7);
 }
 
 .sidebar-collapsed-zone:hover .expand-icon {
@@ -122,8 +126,8 @@
   justify-content: space-between;
   height: 32px;
   padding: 0 8px 0 4px;
-  background: var(--color-base-darker);
-  border-bottom: 1px solid var(--color-border);
+  background: rgba(20, 17, 14, 0.5);
+  border-bottom: 1px solid rgba(232, 227, 211, 0.08);
   flex-shrink: 0;
 }
 
@@ -137,7 +141,7 @@
   font-size: 11px;
   font-weight: 600;
   color: var(--color-text-tertiary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .sidebar-add-wrapper {
@@ -189,7 +193,7 @@
   border-radius: 6px;
   color: var(--color-text-primary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
@@ -242,7 +246,7 @@
   color: var(--color-text-tertiary);
   font-size: 12px;
   margin: 0 0 14px 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
 }
 
 .sidebar-empty button {
@@ -255,7 +259,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -274,14 +278,14 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  padding: 4px 6px;
   margin: 1px 0;
   cursor: pointer;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   transition: all 0.1s ease;
-  border-radius: 6px;
+  border-radius: 4px;
 }
 
 .file-tree-row:hover {
@@ -290,12 +294,12 @@
 }
 
 .file-tree-row.selected {
-  background: rgba(232, 227, 211, 0.08);
+  background: rgba(232, 227, 211, 0.06);
   color: var(--color-text-primary);
 }
 
 .file-tree-row.selected:hover {
-  background: rgba(232, 227, 211, 0.1);
+  background: rgba(232, 227, 211, 0.08);
 }
 
 .file-tree-row.dragging {
@@ -303,19 +307,23 @@
 }
 
 .file-tree-row.drag-over {
-  background: rgba(184, 149, 110, 0.12);
-  outline: 1px dashed rgba(184, 149, 110, 0.4);
+  background: rgba(217, 119, 87, 0.12);
+  outline: 1px dashed rgba(217, 119, 87, 0.4);
   outline-offset: -1px;
 }
 
-.file-tree-row.delete-pending {
-  background: rgba(232, 227, 211, 0.06);
-  border-radius: 6px 6px 0 0;
+.file-tree-row-enter {
+  animation: fileRowEnter 0.3s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@keyframes fileRowEnter {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 .file-tree-row svg {
   flex-shrink: 0;
-  opacity: 0.45;
+  opacity: 0.4;
   color: var(--color-text-tertiary);
 }
 
@@ -351,11 +359,11 @@
 .file-name-input {
   flex: 1;
   background: rgba(232, 227, 211, 0.08);
-  border: 1px solid rgba(184, 149, 110, 0.5);
+  border: 1px solid rgba(217, 119, 87, 0.5);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   color: var(--color-text-primary);
   outline: none;
   min-width: 0;
@@ -376,13 +384,13 @@
   border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 4px;
-  min-width: 140px;
+  min-width: 160px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
   z-index: 1000;
   backdrop-filter: blur(20px);
 }
 
-.file-context-menu button {
+.context-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -393,27 +401,42 @@
   border-radius: 6px;
   color: var(--color-text-primary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.1s ease;
   text-align: left;
 }
 
-.file-context-menu button:hover {
+.context-menu-item:hover {
   background: rgba(232, 227, 211, 0.06);
 }
 
-.file-context-menu button svg {
+.context-menu-item svg {
   opacity: 0.6;
   color: var(--color-text-tertiary);
+  flex-shrink: 0;
 }
 
-.file-context-menu button.delete-btn {
-  color: var(--color-accent);
+.context-menu-item span:first-of-type {
+  flex: 1;
 }
 
-.file-context-menu button.delete-btn:hover {
-  background: rgba(184, 149, 110, 0.12);
+.context-menu-hint {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  margin-left: auto;
+}
+
+.context-menu-item.danger {
+  color: #a06058;
+}
+
+.context-menu-item.danger:hover {
+  background: rgba(160, 96, 88, 0.12);
+}
+
+.context-menu-item.danger svg {
+  color: #a06058;
 }
 
 .context-menu-divider {
@@ -448,71 +471,20 @@
   transition: transform 0.2s ease;
 }
 
-/* Delete confirmation dropdown */
-.delete-confirm {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  margin: 0 0 2px 0;
-  background: rgba(232, 227, 211, 0.06);
-  border-top: 1px solid rgba(232, 227, 211, 0.06);
-  border-radius: 0 0 6px 6px;
-  font-size: 12px;
-  color: var(--color-text-secondary);
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+/* Context menu */
+.sidebar-context-menu {
+  position: fixed;
+  background: var(--color-base-lighter);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 4px;
+  min-width: 140px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 1000;
+  backdrop-filter: blur(20px);
 }
 
-.delete-confirm span {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.delete-confirm-actions {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.delete-confirm-cancel,
-.delete-confirm-delete {
-  padding: 3px 5px;
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-}
-
-.delete-confirm-cancel {
-  color: var(--color-text-tertiary);
-}
-
-.delete-confirm-cancel:hover {
-  background: rgba(232, 227, 211, 0.1);
-  color: var(--color-text-primary);
-}
-
-.delete-confirm-delete {
-  color: #e07070;
-}
-
-.delete-confirm-delete:hover {
-  background: rgba(220, 80, 80, 0.2);
-}
-
-/* Git Sync Section */
-.sidebar-git-section {
-  position: relative;
-  padding: 8px;
-  border-top: 1px solid var(--color-border);
-  flex-shrink: 0;
-}
-
-.git-setup-btn {
+.sidebar-context-menu button {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -521,77 +493,400 @@
   background: transparent;
   border: none;
   border-radius: 6px;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
   font-size: 12px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.1s ease;
+  text-align: left;
 }
 
-.git-setup-btn:hover {
-  background: rgba(232, 227, 211, 0.04);
-  color: var(--color-text-secondary);
+.sidebar-context-menu button:hover {
+  background: rgba(232, 227, 211, 0.06);
 }
 
-.git-setup-btn svg {
-  opacity: 0.5;
-}
-
-.git-setup-btn:hover svg:not(.git-setup-chevron) {
-  opacity: 0.7;
-}
-
-.git-setup-chevron {
-  margin-left: auto;
+.sidebar-context-menu button svg {
   opacity: 0.6;
-  transition: transform 0.2s ease, opacity 0.15s ease;
+  color: var(--color-text-tertiary);
 }
 
-.git-setup-chevron.open {
-  transform: rotate(90deg);
-  opacity: 0.6;
+.sidebar-context-menu button.destructive {
+  color: #a06058;
 }
 
-.git-setup-btn:hover .git-setup-chevron {
-  opacity: 0.6;
+.sidebar-context-menu button.destructive:hover {
+  background: rgba(160, 96, 88, 0.15);
+  color: #c08078;
 }
 
-/* Git Setup Inline Expand */
+.sidebar-context-menu button.destructive svg {
+  color: #a06058;
+  opacity: 0.8;
+}
+
+/* ==========================================================================
+   INTEGRATIONS SECTION - Unified visual treatment
+   ========================================================================== */
+
+/* Integrations wrapper - subtle visual separation from file tree */
+.sidebar-integrations {
+  flex-shrink: 0;
+  margin-top: auto; /* Push to bottom */
+  padding: 4px 6px 6px 6px;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, 0.06));
+}
+
+/* Section header - matches "Project" title styling */
+.integrations-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: relative; /* For popover positioning */
+  padding: 8px 8px 6px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-body);
+}
+
+/* Integration items wrapper */
+.integration-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Git Section - legacy class for backwards compat, will be replaced */
+.sidebar-git-section {
+  flex-shrink: 0;
+  padding: 2px 0;
+}
+
+.git-connected-inline,
 .git-setup-inline {
   display: flex;
   flex-direction: column;
 }
 
+.git-connected-inline.expanded .git-settings-content,
+.git-setup-inline.expanded .git-setup-content {
+  max-height: 400px;
+  opacity: 1;
+  transition: max-height 0.2s ease-out, opacity 0.2s ease-out 0.05s;
+}
+
+.git-settings-content,
 .git-setup-content {
   max-height: 0;
   opacity: 0;
   overflow: hidden;
   transition: max-height 0.2s ease-out, opacity 0.15s ease-out;
+  padding: 0 8px;
 }
 
-.git-setup-inline.expanded .git-setup-content {
-  max-height: 200px;
-  opacity: 1;
-  transition: max-height 0.2s ease-out, opacity 0.2s ease-out 0.05s;
+/* Integration Row - unified styling that matches file tree rows exactly */
+.integration-row-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px; /* Match file tree gap */
+  width: 100%;
+  padding: 6px 8px; /* Match file tree row exactly */
+  margin: 1px 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px; /* Match file tree */
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: left;
 }
 
-/* Git Connected Inline */
-.git-connected-inline {
+.integration-row-btn:hover {
+  background: rgba(232, 227, 211, 0.04);
+  color: var(--color-text-primary);
+}
+
+.integration-row-btn svg {
+  opacity: 0.45; /* Match file tree icon opacity */
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.integration-row-btn:hover svg {
+  opacity: 0.6;
+}
+
+/* Connected state - subtle accent treatment */
+.integration-row-btn.connected {
+  color: var(--color-text-secondary);
+}
+
+.integration-row-btn.connected svg {
+  opacity: 0.55;
+}
+
+.integration-row-btn.connected:hover svg {
+  opacity: 0.7;
+}
+
+/* Integration name stays fixed width, detail fills rest */
+.integration-name {
+  flex-shrink: 0;
+}
+
+.integration-detail {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+  opacity: 0.8;
+}
+
+/* Status indicator - consistent green dot */
+.integration-status-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #6b7a5e;
+  margin-left: 6px;
+  flex-shrink: 0;
+}
+
+/* Chevron - rotates on expand */
+.integration-chevron {
+  opacity: 0.35;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
+
+.integration-row-btn:hover .integration-chevron {
+  opacity: 0.5;
+}
+
+.integration-chevron.open {
+  transform: rotate(90deg);
+  opacity: 0.5;
+}
+
+/* Legacy .git-setup-btn - keep for backwards compat but using unified styles */
+.git-setup-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  margin: 1px 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: left;
+}
+
+.git-setup-btn:hover {
+  background: rgba(232, 227, 211, 0.04);
+  color: var(--color-text-primary);
+}
+
+.git-setup-btn svg {
+  opacity: 0.45;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.git-setup-btn:hover svg {
+  opacity: 0.6;
+}
+
+.git-setup-btn span {
+  flex: 1;
+}
+
+.git-setup-chevron {
+  opacity: 0.35;
+  flex-shrink: 0;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
+
+.git-setup-btn:hover .git-setup-chevron {
+  opacity: 0.5;
+}
+
+.git-setup-chevron.open {
+  transform: rotate(90deg);
+  opacity: 0.5;
+}
+.integrations-info-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 2px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  transition: color 0.15s ease;
+  border-radius: 4px;
+}
+
+.integrations-info-btn:hover {
+  color: var(--color-text-secondary);
+}
+
+.integrations-info-popover {
+  position: absolute;
+  top: 100%;
+  left: 8px;
+  width: 220px;
+  margin-top: 6px;
+  background: var(--color-base-darker);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--color-text-secondary);
+  white-space: normal;
+  z-index: 100;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.integrations-info-popover strong {
+  display: block;
+  color: var(--color-text-primary);
+  margin-bottom: 6px;
+}
+
+.integrations-info-popover p {
+  margin: 0 0 6px 0;
+  line-height: 1.4;
+}
+
+.integrations-info-popover p:last-child {
+  margin-bottom: 0;
+}
+
+/* Integration item - compact row */
+.integration-item {
   display: flex;
   flex-direction: column;
 }
 
-.git-settings-content {
+.integration-item.expanded {
+  border-bottom: 1px solid var(--color-border-subtle);
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+}
+
+.integration-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  text-align: left;
+}
+
+.integration-row:hover {
+  background: rgba(232, 227, 211, 0.04);
+  color: var(--color-text-secondary);
+}
+
+.integration-row svg {
+  opacity: 0.5;
+  flex-shrink: 0;
+}
+
+.integration-row:hover svg {
+  opacity: 0.7;
+}
+
+.integration-name {
+  flex-shrink: 0;
+}
+
+.integration-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.integration-connected {
+  width: 6px;
+  height: 6px;
+  background: #6b7a5e;
+  border-radius: 50%;
+}
+
+.integration-spinner {
+  color: var(--color-text-tertiary);
+  animation: spin 1s linear infinite;
+}
+
+.integration-error {
+  color: #a06058;
+}
+
+.integration-detail {
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.integration-detail-muted {
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+}
+
+.integration-chevron {
+  opacity: 0.4;
+  flex-shrink: 0;
+  transition: transform 0.2s ease, opacity 0.15s ease;
+}
+
+.integration-item.expanded .integration-chevron {
+  transform: rotate(90deg);
+  opacity: 0.6;
+}
+
+.integration-row:hover .integration-chevron {
+  opacity: 0.6;
+}
+
+/* Integration content - expandable */
+.integration-content {
   max-height: 0;
   opacity: 0;
   overflow: hidden;
   transition: max-height 0.2s ease-out, opacity 0.15s ease-out;
 }
 
-.git-connected-inline.expanded .git-settings-content {
-  max-height: 200px;
+.integration-item.expanded .integration-content {
+  max-height: 300px;
   opacity: 1;
   transition: max-height 0.2s ease-out, opacity 0.2s ease-out 0.05s;
+}
+
+.integration-settings,
+.integration-connect {
+  padding: 8px 8px 4px 8px;
 }
 
 .git-settings-inner {
@@ -770,7 +1065,7 @@
 }
 
 .git-disconnect-btn:hover {
-  color: #dc5050;
+  color: #a06058;
 }
 
 /* Conflict UI */
@@ -840,7 +1135,7 @@
   border-radius: 8px;
   color: var(--color-text-primary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   outline: none;
   box-sizing: border-box;
   transition: border-color 0.15s ease;
@@ -874,7 +1169,7 @@
   color: var(--color-base);
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   margin-top: 4px;
@@ -915,7 +1210,7 @@
   border-radius: 6px;
   font-size: 12px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
 }
@@ -948,17 +1243,19 @@
   position: relative;
 }
 
+/* Connected integration row - matches file tree rhythm */
 .git-status-btn {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 6px;
   width: 100%;
-  padding: 8px 10px;
+  padding: 6px 8px; /* Match file tree exactly */
+  margin: 1px 0;
   background: transparent;
   border: none;
   border-radius: 6px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all 0.1s ease;
 }
 
 .git-status-btn:hover {
@@ -966,23 +1263,32 @@
 }
 
 .git-status-btn.syncing {
-  opacity: 0.7;
+  opacity: 0.85;
 }
 
 .git-status-info {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   color: var(--color-text-secondary);
+  font-size: 13px;
 }
 
 .git-status-info svg {
+  opacity: 0.45;
+  color: var(--color-text-tertiary);
+}
+
+.git-status-btn:hover .git-status-info svg {
   opacity: 0.6;
 }
 
 .git-status-btn .git-setup-chevron {
-  color: var(--color-text-secondary);
-  stroke: var(--color-text-secondary);
+  opacity: 0.35;
+}
+
+.git-status-btn:hover .git-setup-chevron {
+  opacity: 0.5;
 }
 
 .git-status-btn > svg,
@@ -990,12 +1296,17 @@
 .git-status-btn > .git-sync-spinner,
 .git-status-btn > .git-behind-badge,
 .git-status-btn > .git-sync-indicator {
-  margin-left: 4px;
+  margin-left: auto;
 }
 
 .git-status-text {
-  font-size: 12px;
-  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .git-sync-indicator {
@@ -1006,7 +1317,7 @@
 }
 
 .git-sync-indicator.connected {
-  background: #4ade80;
+  background: #6b7a5e;
 }
 
 .git-sync-spinner {
@@ -1020,7 +1331,7 @@
 }
 
 .git-error-icon {
-  color: #f87171;
+  color: #a06058;
 }
 
 .git-behind-badge {
@@ -1047,11 +1358,11 @@
 .git-error-banner {
   padding: 8px 12px;
   margin: 4px;
-  background: rgba(248, 113, 113, 0.1);
+  background: rgba(160, 96, 88, 0.12);
   border-radius: 6px;
   font-size: 11px;
-  color: #f87171;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  color: #a06058;
+  font-family: var(--font-body);
 }
 
 .git-action-btn {
@@ -1065,7 +1376,7 @@
   border-radius: 6px;
   color: var(--color-text-secondary);
   font-size: 13px;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
   cursor: pointer;
   transition: all 0.15s ease;
   text-align: left;
@@ -1091,15 +1402,15 @@
 }
 
 .git-action-btn.danger:hover {
-  color: #f87171;
-  background: rgba(248, 113, 113, 0.1);
+  color: #a06058;
+  background: rgba(160, 96, 88, 0.12);
 }
 
 .git-last-sync {
   margin-left: auto;
   font-size: 11px;
   color: var(--color-text-tertiary);
-  font-family: 'SF Mono', Monaco, monospace;
+  font-family: var(--font-mono);
 }
 
 .git-dropdown-divider {
@@ -1116,7 +1427,7 @@
   justify-content: center;
   gap: 8px;
   padding: 24px;
-  color: #4ade80;
+  color: #6b7a5e;
 }
 
 .git-check-icon {
@@ -1138,7 +1449,309 @@
 .git-setup-done span {
   font-size: 13px;
   font-weight: 500;
-  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif;
+  font-family: var(--font-body);
+}
+
+/* Zotero Section - unified with Git section */
+.sidebar-zotero-section {
+  flex-shrink: 0;
+  padding: 2px 0;
+}
+
+.zotero-connected-inline,
+.zotero-setup-inline {
+  display: flex;
+  flex-direction: column;
+}
+
+.zotero-connected-inline.expanded .zotero-settings-content,
+.zotero-setup-inline.expanded .zotero-setup-content {
+  max-height: 300px;
+  opacity: 1;
+  transition: max-height 0.2s ease-out, opacity 0.2s ease-out 0.05s;
+}
+
+.zotero-settings-content,
+.zotero-setup-content {
+  max-height: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-height 0.2s ease-out, opacity 0.15s ease-out;
+  padding: 0 8px;
+}
+
+/* Zotero buttons - match file tree rhythm exactly */
+.zotero-status-btn,
+.zotero-setup-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px; /* Match file tree row exactly */
+  margin: 1px 0;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.1s ease;
+  text-align: left;
+}
+
+.zotero-status-btn:hover,
+.zotero-setup-btn:hover {
+  background: rgba(232, 227, 211, 0.04);
+  color: var(--color-text-primary);
+}
+
+.zotero-status-btn svg,
+.zotero-setup-btn svg {
+  opacity: 0.45;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.zotero-status-btn:hover svg,
+.zotero-setup-btn:hover svg {
+  opacity: 0.6;
+}
+
+.zotero-status-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+}
+
+.zotero-status-text {
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--color-text-tertiary);
+}
+
+.zotero-setup-btn span {
+  flex: 1;
+}
+
+.zotero-setup-chevron {
+  opacity: 0.35;
+  flex-shrink: 0;
+  margin-left: auto;
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.15s ease;
+}
+
+.zotero-status-btn:hover .zotero-setup-chevron,
+.zotero-setup-btn:hover .zotero-setup-chevron {
+  opacity: 0.5;
+}
+
+.zotero-connected-inline.expanded .zotero-setup-chevron,
+.zotero-setup-inline.expanded .zotero-setup-chevron {
+  transform: rotate(90deg);
+  opacity: 0.5;
+}
+
+.zotero-settings-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px 0;
+}
+
+.zotero-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.zotero-setting-label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.zotero-setting-value {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-mono);
+}
+
+.zotero-key-link {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  padding: 0 4px;
+  transition: color 0.15s ease;
+}
+
+.zotero-key-link:hover {
+  color: var(--color-accent);
+}
+
+.zotero-setup-done {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: #6b7a5e;
+}
+
+.zotero-check-icon {
+  animation: checkPop 0.3s ease;
+}
+
+.zotero-setup-done span {
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
+}
+
+/* Zotero-specific styles (shared with integration) */
+.zotero-last-sync-info {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 4px 0;
+}
+
+.zotero-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 4px;
+}
+
+.zotero-sync-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: transparent;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 0;
+  transition: color 0.15s ease;
+}
+
+.zotero-sync-btn:hover:not(:disabled) {
+  color: var(--color-text-primary);
+}
+
+.zotero-sync-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.zotero-sync-spinner {
+  color: var(--color-text-tertiary);
+  animation: spin 1s linear infinite;
+}
+
+.zotero-disconnect-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 6px 0;
+  text-align: left;
+  transition: color 0.15s ease;
+}
+
+.zotero-disconnect-btn:hover {
+  color: #a06058;
+}
+
+.zotero-hint {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  padding: 8px 0 4px 0;
+}
+
+.zotero-hint code {
+  background: rgba(232, 227, 211, 0.08);
+  padding: 2px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* Zotero Config Form */
+.zotero-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0 4px 0;
+}
+
+.zotero-input {
+  width: 100%;
+  padding: 10px 12px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-family: var(--font-body);
+  outline: none;
+  box-sizing: border-box;
+  transition: border-color 0.15s ease;
+}
+
+.zotero-input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.zotero-input:focus {
+  border-color: var(--color-accent);
+}
+
+.zotero-token-link {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  text-decoration: none;
+  padding: 0 4px;
+  transition: color 0.15s ease;
+}
+
+.zotero-token-link:hover {
+  color: var(--color-accent);
+}
+
+.zotero-error {
+  padding: 8px 12px;
+  background: rgba(160, 96, 88, 0.12);
+  border-radius: 6px;
+  font-size: 11px;
+  color: #a06058;
+  font-family: var(--font-body);
+}
+
+.zotero-connect-btn {
+  padding: 10px 14px;
+  background: var(--color-accent);
+  border: none;
+  border-radius: 8px;
+  color: var(--color-base);
+  font-size: 13px;
+  font-weight: 500;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  margin-top: 4px;
+}
+
+.zotero-connect-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.zotero-connect-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 /* Mobile: sidebar as slide-in overlay */
@@ -1174,4 +1787,113 @@
   .project-sidebar-overlay.visible {
     display: block;
   }
+}
+
+/* ==========================================================================
+   SIDEBAR FOOTER - Compact sync & settings
+   ========================================================================== */
+
+.sidebar-footer {
+  flex-shrink: 0;
+  margin-top: auto;
+  padding: 8px 6px 6px 6px;
+  border-top: 1px solid var(--color-border-subtle);
+}
+
+.sidebar-footer-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.share-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-family: var(--font-body);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.share-btn:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.share-badge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  background: var(--color-accent);
+  color: var(--color-base);
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 8px;
+}
+
+.sidebar-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sync-btn-compact {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sync-btn-compact:hover:not(:disabled) {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+.sync-btn-compact:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sync-btn-compact .spinning {
+  animation: spin 1s linear infinite;
+}
+
+.integrations-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-size: 12px;
+}
+
+.integrations-link:hover {
+  background: rgba(232, 227, 211, 0.08);
+  color: var(--color-text-secondary);
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }

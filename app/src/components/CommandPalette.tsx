@@ -1,17 +1,16 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react'
-import { Search, FileText, Plus, RotateCw, HelpCircle, File } from 'lucide-react'
-import type { SearchResult } from '../types/Document'
-import DocumentSearcher from '../services/DocumentSearcher'
+import React, { useState, useEffect, useCallback, useRef, useDeferredValue } from 'react'
+import { Search, Plus, RotateCw, HelpCircle, File, BookOpen } from 'lucide-react'
 import ProjectSearcher from '../services/ProjectSearcher'
 import type { FileSearchResult } from '../services/ProjectSearcher'
+import citationService, { type CitationItem } from '../services/CitationService'
 import './CommandPalette.css'
 
 interface CommandPaletteProps {
   isOpen: boolean
   isClosing?: boolean
   onClose: () => void
-  onSelectDocument: (documentId: string) => void
   onSelectFile?: (filePath: string, lineNumber?: number) => void
+  onSelectCitation?: (citation: CitationItem) => void
   onCreateNew: () => void
   onOpenHelp?: () => void
 }
@@ -30,20 +29,27 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   isOpen,
   isClosing = false,
   onClose,
-  onSelectDocument,
   onSelectFile,
+  onSelectCitation,
   onCreateNew,
   onOpenHelp
 }) => {
   const [query, setQuery] = useState('')
-  const [results, setResults] = useState<SearchResult[]>([])
+  // useDeferredValue keeps the input responsive while search runs
+  // React can interrupt low-priority deferred work if typing continues
+  const deferredQuery = useDeferredValue(query)
   const [fileResults, setFileResults] = useState<FileSearchResult[]>([])
+  const [citationResults, setCitationResults] = useState<CitationItem[]>([])
   const [commands, setCommands] = useState<Command[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [isSearching, setIsSearching] = useState(false)
   const [internalClosing, setInternalClosing] = useState(false)
+  const searchRequestRef = useRef(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+
+  // Total selectable items count
+  const totalItems = commands.length + citationResults.length + fileResults.length
 
   // Get all available commands
   const getDefaultCommands = useCallback((): Command[] => {
@@ -129,56 +135,63 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
     return relevantCommands
   }, [getDefaultCommands])
 
-  // Search for documents and commands with smart context
+  // Search for files and commands with smart context
   const performSearch = useCallback(async (searchQuery: string) => {
+    const requestId = ++searchRequestRef.current
     if (!searchQuery.trim()) {
-      // Empty state: show recent documents and project files
-      const recentResults = await DocumentSearcher.search('', { maxResults: 8 })
+      // Empty state: show recent project files
+      const recentFiles = await ProjectSearcher.search('', { maxResults: 8 })
+      if (requestId !== searchRequestRef.current) return
+      setIsSearching(false)
       setCommands([])
-      setResults(recentResults)
-      setFileResults([])
+      setFileResults(recentFiles)
+      setCitationResults([])
       return
     }
 
     setIsSearching(true)
     try {
-      // Search for documents and project files in parallel
-      const [searchResults, projectFileResults] = await Promise.all([
-        DocumentSearcher.search(searchQuery, {
-          maxResults: 5,
-          includeContent: true,
-          fuzzyMatch: true
-        }),
+      // Search for project files and citations in parallel
+      const [projectFileResults, citations] = await Promise.all([
         ProjectSearcher.search(searchQuery, {
-          maxResults: 8,
+          maxResults: 10,
           searchContent: true
-        })
+        }),
+        citationService.isZoteroConnected()
+          ? citationService.search(searchQuery, 5)
+          : Promise.resolve([])
       ])
+
+      if (requestId !== searchRequestRef.current) return
 
       // Use natural language intent detection
       const intentBasedCommands = detectIntent(searchQuery)
 
-      setResults(searchResults)
       setFileResults(projectFileResults)
+      setCitationResults(citations)
       setCommands(intentBasedCommands)
     } catch (error) {
+      if (requestId !== searchRequestRef.current) return
       console.error('Search error:', error)
-      setResults([])
       setFileResults([])
+      setCitationResults([])
       setCommands([])
     } finally {
-      setIsSearching(false)
+      if (requestId === searchRequestRef.current) setIsSearching(false)
     }
-  }, [getDefaultCommands, detectIntent])
+  }, [detectIntent])
 
-  // Debounced search
+  // Search triggered by deferred query (keeps input responsive)
+  // The 150ms timeout is still useful for very fast typing
   useEffect(() => {
+    if (!isOpen) return
+    ++searchRequestRef.current
     const timeoutId = setTimeout(() => {
-      performSearch(query)
-    }, 150)
-    
-    return () => clearTimeout(timeoutId)
-  }, [query, performSearch])
+      performSearch(deferredQuery)
+    }, 100) // Reduced since useDeferredValue already provides debouncing
+
+    return () => { clearTimeout(timeoutId); ++searchRequestRef.current }
+  }, [isOpen, deferredQuery, performSearch])
 
   // Handle close with animation (for internal triggers like ESC, overlay click)
   const handleClose = useCallback(() => {
@@ -209,15 +222,13 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
   // Update selected index when results change
   useEffect(() => {
     setSelectedIndex(0)
-  }, [results, fileResults, commands])
+  }, [fileResults, citationResults, commands])
 
   // Keyboard navigation
   useEffect(() => {
     if (!isOpen) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      const totalItems = commands.length + fileResults.length + results.length
-
       switch (e.key) {
         case 'Escape':
           e.preventDefault()
@@ -226,12 +237,12 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
         case 'ArrowDown':
           e.preventDefault()
-          setSelectedIndex(prev => (prev + 1) % totalItems)
+          setSelectedIndex(prev => totalItems ? (prev + 1) % totalItems : 0)
           break
 
         case 'ArrowUp':
           e.preventDefault()
-          setSelectedIndex(prev => (prev - 1 + totalItems) % totalItems)
+          setSelectedIndex(prev => totalItems ? (prev - 1 + totalItems) % totalItems : 0)
           break
 
         case 'Enter':
@@ -243,16 +254,18 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen, selectedIndex, commands, fileResults, results, handleClose, onSelectDocument, onSelectFile])
+  }, [isOpen, selectedIndex, totalItems, handleClose, onSelectFile, onSelectCitation])
 
-  // Scroll selected item into view
+  // Scroll selected item into view - using 'instant' to avoid jank
+  // CSS scroll-margin handles the padding, so no layout thrashing
   useEffect(() => {
     if (listRef.current) {
-      const selectedElement = listRef.current.children[selectedIndex] as HTMLElement
+      const selectableItems = listRef.current.querySelectorAll('[data-selectable-index]')
+      const selectedElement = selectableItems[selectedIndex] as HTMLElement
       if (selectedElement) {
         selectedElement.scrollIntoView({
           block: 'nearest',
-          behavior: 'smooth'
+          behavior: 'instant'
         })
       }
     }
@@ -264,34 +277,23 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
       if (commands[index]) {
         commands[index].action()
       }
-    } else if (index < commands.length + fileResults.length) {
+    } else if (index < commands.length + citationResults.length) {
+      // Citation item clicked
+      const citationIndex = index - commands.length
+      const citation = citationResults[citationIndex]
+      if (citation && onSelectCitation) {
+        onSelectCitation(citation)
+        handleClose()
+      }
+    } else {
       // Project file item clicked
-      const fileIndex = index - commands.length
+      const fileIndex = index - commands.length - citationResults.length
       const result = fileResults[fileIndex]
       if (result && onSelectFile) {
         onSelectFile(result.file.path, result.lineNumber)
         handleClose()
       }
-    } else {
-      // Document item clicked
-      const docIndex = index - commands.length - fileResults.length
-      if (results[docIndex]) {
-        onSelectDocument(results[docIndex].document.id)
-        handleClose()
-      }
     }
-  }
-
-  const formatDate = (date: Date): string => {
-    const now = new Date()
-    const diffTime = now.getTime() - date.getTime()
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24))
-    
-    if (diffDays === 0) return 'Today'
-    if (diffDays === 1) return 'Yesterday'
-    if (diffDays < 7) return `${diffDays} days ago`
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} weeks ago`
-    return date.toLocaleDateString()
   }
 
   if (!isOpen) return null
@@ -340,6 +342,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                       return (
                         <div
                           key={command.id}
+                          data-selectable-index={itemIndex}
                           className={`command-palette-item command-item ${itemIndex === selectedIndex ? 'selected' : ''}`}
                           onClick={() => handleItemClick(itemIndex)}
                         >
@@ -356,15 +359,44 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </div>
                 )}
 
-                {/* Project Files Section */}
-                {fileResults.length > 0 && (
-                  <div className="files-section">
-                    <div className="section-header">Project Files</div>
-                    {fileResults.map((result, index) => {
+                {/* Citations Section */}
+                {citationResults.length > 0 && (
+                  <div className="citations-section">
+                    <div className="section-header">Citations</div>
+                    {citationResults.map((citation, index) => {
                       const itemIndex = commands.length + index
                       return (
                         <div
+                          key={citation.key}
+                          data-selectable-index={itemIndex}
+                          className={`command-palette-item citation-item ${itemIndex === selectedIndex ? 'selected' : ''}`}
+                          onClick={() => handleItemClick(itemIndex)}
+                        >
+                          <div className="item-icon">
+                            <BookOpen size={16} />
+                          </div>
+                          <div className="item-content">
+                            <div className="item-title">{citation.title}</div>
+                            <div className="item-subtitle">
+                              {citation.creatorsText}{citation.year ? ` (${citation.year})` : ''} · {citation.citeKey}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+
+                {/* Project Files Section */}
+                {fileResults.length > 0 && (
+                  <div className="files-section">
+                    <div className="section-header">{query ? 'Files' : 'Project files'}</div>
+                    {fileResults.map((result, index) => {
+                      const itemIndex = commands.length + citationResults.length + index
+                      return (
+                        <div
                           key={result.file.path}
+                          data-selectable-index={itemIndex}
                           className={`command-palette-item file-item ${itemIndex === selectedIndex ? 'selected' : ''}`}
                           onClick={() => handleItemClick(itemIndex)}
                         >
@@ -375,8 +407,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                             <div className="item-title">{result.file.name}</div>
                             <div className="item-subtitle">
                               {result.matchType === 'content' && result.lineNumber
-                                ? `Line ${result.lineNumber} · ${result.file.path}`
-                                : result.file.path}
+                                ? `Line ${result.lineNumber}`
+                                : result.file.path.replace('/project/src/', '')}
                             </div>
                             {result.snippet && (
                               <div className="item-snippet">{result.snippet}</div>
@@ -388,43 +420,8 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                   </div>
                 )}
 
-                {/* Document Results */}
-                {results.length > 0 && (
-                  <div className="documents-section">
-                    <div className="section-header">
-                      {query ? 'Documents' : 'Recent'}
-                    </div>
-                    {results.map((result, index) => {
-                      const itemIndex = commands.length + fileResults.length + index
-                      return (
-                        <div
-                          key={result.document.id}
-                          className={`command-palette-item document-item ${itemIndex === selectedIndex ? 'selected' : ''}`}
-                          onClick={() => handleItemClick(itemIndex)}
-                        >
-                          <div className="item-icon">
-                            <FileText size={16} />
-                          </div>
-                          <div className="item-content">
-                            <div className="item-title">
-                              {result.highlights.length > 0 ? (
-                                <span dangerouslySetInnerHTML={{ __html: result.highlights[0] }} />
-                              ) : (
-                                result.document.title
-                              )}
-                            </div>
-                            <div className="item-subtitle">
-                              {formatDate(result.document.lastViewedAt)}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
                 {/* Empty State */}
-                {results.length === 0 && fileResults.length === 0 && commands.length === 0 && (
+                {fileResults.length === 0 && citationResults.length === 0 && commands.length === 0 && (
                   <div className="command-palette-empty">
                     {query ? (
                       <div className="empty-with-suggestion">
@@ -435,9 +432,9 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({
                       </div>
                     ) : (
                       <div className="empty-welcome">
-                        <div className="empty-message">No recent documents</div>
+                        <div className="empty-message">No files yet</div>
                         <div className="empty-suggestion">
-                          Type "new" to create a document
+                          Type "new" to create a file
                         </div>
                       </div>
                     )}

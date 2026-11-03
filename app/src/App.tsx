@@ -1,154 +1,355 @@
 import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import type { ImperativePanelHandle } from 'react-resizable-panels'
+import { TriangleAlert } from 'lucide-react'
 import CommandPalette from './components/CommandPalette'
 import LaTeXEditor from './components/LaTeXEditor/LaTeXEditor'
 import EmptyState from './components/EmptyState'
-
-// Lazy load PDF viewer - only loads when preview is shown
-const PDFViewer = lazy(() => import('./components/PDFViewer'))
-import DocumentationModal from './components/DocumentationModal'
-import ProjectSidebar from './components/ProjectSidebar'
-import Onboarding from './components/Onboarding/Onboarding'
+import { useIsMobile } from './hooks/useIsMobile'
 import type { FileItem } from './components/ProjectSidebar'
-import { useDocument } from './hooks/useDocument'
+import type { CitationItem } from './services/CitationService'
+
+// Lazy load heavy components - only loads when needed
+const MobileStudio = lazy(() => import('./components/MobileStudio/MobileStudio'))
+const PDFViewer = lazy(() => import('./components/PDFViewer'))
+const DocumentationModal = lazy(() => import('./components/DocumentationModal'))
+const ProjectSidebar = lazy(() => import('./components/ProjectSidebar'))
+
+import { useFileManager } from './hooks/useFileManager'
+import FileReaderService from './services/FileReaderService'
 import { useAutoSave } from './hooks/useAutoSave'
-import DocumentManager from './services/DocumentManager'
+import { useCompilation } from './hooks/useCompilation'
+import { useModals } from './hooks/useModals'
+import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
+import { fileManager } from './services/FileManager'
+import { fileSystemWatcher } from './services/FileSystemWatcher'
 import GitService from './services/GitService'
-import CompilerService from './services/CompilerService'
-import type { CompileStatus } from './services/CompilerService'
+import { ToastContainer } from './components/Toast/Toast'
+import { TabBar } from './components/TabBar/TabBar'
+import EventBus from './services/EventBus'
+import ProjectStore from './services/ProjectStore'
+import StateStore from './services/FileStateStore'
+import { fileSystem } from '@siglum/filesystem'
+import { useEventBus } from './hooks/useEventBus'
 import './App.css'
 
-// Make DocumentManager available globally in development
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'])
+const TEXT_EXTS = new Set([
+  'tex', 'sty', 'cls', 'bib', 'bst', 'dtx', 'ins', 'def', 'cfg', 'fd',
+  'txt', 'md', 'csv', 'tsv', 'json', 'xml', 'yaml', 'yml', 'toml',
+  'log', 'aux', 'toc', 'lof', 'lot', 'bbl', 'blg', 'idx', 'ind', 'ilg',
+  'sh', 'py', 'lua', 'js', 'css', 'html', 'htm', 'tikz', 'pgf',
+])
+const MAX_PREVIEW_BYTES = 50 * 1024 * 1024 // 50 MB
+function getExt(p: string) { return (p.split('.').pop() || '').toLowerCase() }
+function isImagePath(p: string) { return IMAGE_EXTS.has(getExt(p)) }
+function isTextPath(p: string) {
+  const ext = getExt(p)
+  return !ext || TEXT_EXTS.has(ext)
+}
+
+// Make fileManager available globally in development
 if (import.meta.env.DEV) {
-  (window as any).DocumentManager = DocumentManager;
+  (window as any).fileManager = fileManager;
+  (window as any).fileSystemWatcher = fileSystemWatcher;
 }
 
 const App: React.FC = () => {
-  const { currentDocument, isLoading, error, updateContent, loadDocument, createNewDocument } = useDocument()
-  const [latexCode, setLatexCode] = useState('')
+  const isMobile = useIsMobile()
+  const { currentFile, fileTree, isLoading, error, openFile, createNewFile, getRecentPaths } = useFileManager()
+  const [editorDraft, setEditorDraft] = useState({ path: '', content: '' })
+  // Keep document identity and source coherent in the first render after a tab switch.
+  const latexCode = editorDraft.path === currentFile?.path ? editorDraft.content : currentFile?.content ?? ''
+  const setLatexCode = useCallback((content: string) => {
+    setEditorDraft({ path: currentFile?.path ?? '', content })
+  }, [currentFile?.path])
   const [showPreview, setShowPreview] = useState(false)
   const [showDesktopPreview, setShowDesktopPreview] = useState(true)
   const [isLoaded, setIsLoaded] = useState(false)
-  const [touchStart, setTouchStart] = useState({ x: 0, y: 0 })
-  const [showCommandPalette, setShowCommandPalette] = useState(false)
+  const [sidebarExpanded, setSidebarExpanded] = useState(false)
+  const [stateLoaded, setStateLoaded] = useState(false)
 
-  // Compiler state
-  const [pdfData, setPdfData] = useState<Uint8Array | null>(null)
-  const [compileStatus, setCompileStatus] = useState<CompileStatus>('idle')
-  const [compileTimeMs, setCompileTimeMs] = useState<number | null>(null)
-  const compileTimeoutRef = useRef<number | null>(null)
+  // Image preview — tracked separately to avoid text read/autosave corruption
+  const [imageFilePath, setImageFilePath] = useState<string | null>(null)
+  const [imageBlobUrl, setImageBlobUrl] = useState<string | null>(null)
+  const [imageError, setImageError] = useState<string | null>(null)
 
-  // Compiler settings (shared with editor)
-  const [compilerSettings, setCompilerSettings] = useState({
-    autoCompile: true,
-    compiler: 'auto' as 'auto' | 'pdflatex' | 'xelatex',
-    ctanFetch: true,
-    cachePreamble: true,
-    autoUnload: true,
-  })
-  
-  const [isClosingCommandPalette, setIsClosingCommandPalette] = useState(false)
-  const [showDocumentation, setShowDocumentation] = useState(false)
-  const [isClosingDocumentation, setIsClosingDocumentation] = useState(false)
-  const [documentationOpenedFromPalette, setDocumentationOpenedFromPalette] = useState(false)
-  const [sidebarExpanded, setSidebarExpanded] = useState(() => {
-    const saved = localStorage.getItem('siglum-sidebar-expanded')
-    return saved === 'true'
-  })
-  const [projectFiles, setProjectFiles] = useState<FileItem[]>(() => {
-    // Load from localStorage on init
-    const saved = localStorage.getItem('siglum-project-files')
-    return saved ? JSON.parse(saved) : []
-  })
-  const [selectedFileId, setSelectedFileId] = useState<string | undefined>()
-  const [selectedFilePath, setSelectedFilePath] = useState<string | undefined>()
-  const [showOnboarding, setShowOnboarding] = useState(() => {
-    return !localStorage.getItem('siglum-onboarding-complete')
-  })
+  useEffect(() => {
+    if (!imageFilePath) {
+      setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+      setImageError(null)
+      return
+    }
+    let cancelled = false
+    ;(async () => {
+      try {
+        const stats = await fileSystem.stat(imageFilePath)
+        if (cancelled) return
+        if (stats.size > MAX_PREVIEW_BYTES) {
+          setImageError(`File too large to preview (${(stats.size / 1024 / 1024).toFixed(0)} MB)`)
+          setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+          return
+        }
+        const data = await fileSystem.readBinary(imageFilePath, { autoDecompress: false })
+        if (cancelled) return
+        const ext = (imageFilePath.split('.').pop() || 'png').toLowerCase()
+        const mime = ext === 'svg' ? 'image/svg+xml' : `image/${ext === 'jpg' ? 'jpeg' : ext}`
+        const url = URL.createObjectURL(new Blob([data], { type: mime }))
+        setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return url })
+        setImageError(null)
+      } catch {
+        if (!cancelled) {
+          setImageBlobUrl(null)
+          setImageError('Failed to load image')
+        }
+      }
+    })()
+    return () => {
+      cancelled = true
+      setImageBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null })
+    }
+  }, [imageFilePath])
+
+  // Convert fileTree to FileItem array for sidebar compatibility
+  const projectFiles = React.useMemo((): FileItem[] => {
+    if (!fileTree?.children) return []
+    const convert = (node: typeof fileTree): FileItem => ({
+      id: node.id,
+      name: node.name,
+      path: node.path,
+      type: node.type === 'directory' ? 'folder' : 'file',
+      children: node.children?.map(convert)
+    })
+    return fileTree.children.map(convert)
+  }, [fileTree])
+
+  // Keep ProjectStore in sync so autocomplete/plugins can access the file list
+  React.useEffect(() => {
+    ProjectStore.setFiles(projectFiles)
+  }, [projectFiles])
+
+  // Current file path from fileManager
+  const selectedFilePath = currentFile?.path
+  // Sidebar highlights image if viewing one, otherwise the open text file
+  const selectedFileId = (imageFilePath || selectedFilePath) ? `fs:${imageFilePath || selectedFilePath}` : undefined
   const [triggerGitConnect, setTriggerGitConnect] = useState(false)
   const [showConflictModal, setShowConflictModal] = useState(false)
+  const [showWordCount, setShowWordCount] = useState(false)
+  const [showCompileStatus, setShowCompileStatus] = useState(true)
+
   const editorPanelRef = useRef<ImperativePanelHandle>(null)
   const previewPanelRef = useRef<ImperativePanelHandle>(null)
 
-  // Sync local state with current document and update browser title
+  // Compilation state from hook
+  const {
+    pdfData,
+    syncTexData,
+    compileStatus,
+    compileTimeMs,
+    compilerSettings,
+    setCompilerSettings,
+    compile,
+    compileRef,
+    autoCompileRef,
+    clearPendingAutoCompile,
+    diagnostics,
+  } = useCompilation(latexCode, isLoaded, currentFile?.path)
+
+  // Modal state from hook
+  const {
+    showCommandPalette,
+    isClosingCommandPalette,
+    showDocumentation,
+    isClosingDocumentation,
+    documentationOpenedFromPalette,
+    documentationDefaultTab,
+    openCommandPalette,
+    closeCommandPalette,
+    openDocumentation,
+    closeDocumentation,
+    backFromDocumentation,
+    setShowCommandPalette,
+  } = useModals()
+
+  // Memoized callbacks for keyboard shortcuts
+  const handleCloseCurrentDocument = useCallback(async () => {
+    const recentPaths = getRecentPaths()
+    if (recentPaths.length > 1) {
+      await openFile(recentPaths[1])
+    } else {
+      await createNewFile()
+    }
+  }, [openFile, createNewFile, getRecentPaths])
+
+  const handleToggleSidebar = useCallback(() => {
+    setSidebarExpanded(prev => !prev)
+  }, [])
+
+  const handleExpandSidebar = useCallback(() => {
+    setSidebarExpanded(true)
+  }, [])
+
+  const handleCollapseSidebar = useCallback(() => {
+    setSidebarExpanded(false)
+  }, [])
+
+  const handleCloseCommandPaletteModal = useCallback(() => {
+    setShowCommandPalette(false)
+  }, [])
+
+  const handleGitConnectTriggered = useCallback(() => {
+    setTriggerGitConnect(false)
+  }, [])
+
+  // Tab bar state
+  const tabsRef = useRef<string[]>([])
+  const handleTabsChanged = useCallback((tabs: string[]) => {
+    tabsRef.current = tabs
+  }, [])
+  const selectTabByIndex = useCallback((index: number) => {
+    const tabs = tabsRef.current
+    if (index < tabs.length) {
+      openFile(tabs[index])
+    }
+  }, [openFile])
+
+  // Keyboard shortcuts hook
+  useKeyboardShortcuts({
+    showCommandPalette,
+    showDesktopPreview,
+    showDocumentation,
+    onOpenCommandPalette: openCommandPalette,
+    onCloseCommandPalette: closeCommandPalette,
+    onOpenDocumentation: openDocumentation,
+    onCloseDocumentation: closeDocumentation,
+    onCreateNewDocument: createNewFile,
+    onCloseCurrentDocument: handleCloseCurrentDocument,
+    onToggleSidebar: handleToggleSidebar,
+    setShowDesktopPreview,
+    setShowPreview,
+    onSelectTabByIndex: selectTabByIndex,
+  })
+
+  // Sync local state with current file and update browser title
   useEffect(() => {
-    if (currentDocument) {
-      setLatexCode(currentDocument.content)
-      // Update browser tab title with document title
-      const titlePrefix = currentDocument.title === `Untitled ${new Date().toLocaleDateString()}` 
-        ? 'Untitled' 
-        : currentDocument.title
+    if (currentFile) {
+      setLatexCode(currentFile.content)
+      // Update browser tab title with file name
+      const fileName = currentFile.path.split('/').pop() || 'Untitled'
+      const titlePrefix = fileName.replace(/\.tex$/, '')
       document.title = `${titlePrefix} - Siglum`
     } else {
-      // Default title when no document
+      // Default title when no file
       document.title = 'Siglum - LaTeX Editor'
     }
-  }, [currentDocument])
+  }, [currentFile])
 
-  // Trigger loading animation after initial render
+  // Update title when viewing an image
   useEffect(() => {
+    if (imageFilePath) {
+      const name = imageFilePath.split('/').pop() || 'Image'
+      document.title = `${name} - Siglum`
+    }
+  }, [imageFilePath])
+
+  // Trigger loading animation when editor becomes visible
+  const hasFile = !!currentFile
+  useEffect(() => {
+    if (!hasFile) {
+      setIsLoaded(false)
+      return
+    }
     const timer = setTimeout(() => {
       setIsLoaded(true)
     }, 100)
     return () => clearTimeout(timer)
-  }, [])
+  }, [hasFile])
 
-  // Eagerly initialize compiler so it's ready when user starts editing
+  // Save sidebar state to StateStore
   useEffect(() => {
-    CompilerService.initialize().catch(() => {
-      // Initialization errors will be handled when compile is called
-    })
-  }, [])
-
-  // Also update title when content changes (for auto-generated titles)
-  useEffect(() => {
-    if (currentDocument && latexCode !== currentDocument.content) {
-      // Title might have changed due to content update
-      const titlePrefix = currentDocument.title === `Untitled ${new Date().toLocaleDateString()}`
-        ? 'Untitled'
-        : currentDocument.title
-      document.title = `${titlePrefix} - Siglum`
+    if (stateLoaded) {
+      StateStore.setSidebarExpanded(sidebarExpanded)
     }
-  }, [currentDocument, latexCode])
+  }, [sidebarExpanded, stateLoaded])
 
-  // Save project files to localStorage when they change
+  // Load app state on mount — raw localStorage, zero module dependencies
   useEffect(() => {
-    localStorage.setItem('siglum-project-files', JSON.stringify(projectFiles))
-  }, [projectFiles])
+    try {
+      const raw = localStorage.getItem('siglum_app_state')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        if (parsed.sidebarExpanded !== undefined) setSidebarExpanded(parsed.sidebarExpanded)
+        // projectFiles now comes from FileSystemWatcher, no need to load from localStorage
+        if (parsed.showWordCount !== undefined) setShowWordCount(parsed.showWordCount)
+        if (parsed.showCompileStatus !== undefined) setShowCompileStatus(parsed.showCompileStatus)
+      }
+    } catch { /* localStorage empty or corrupted — use defaults */ }
+    setStateLoaded(true)
+  }, [])
 
-  // Save sidebar state to localStorage
-  useEffect(() => {
-    localStorage.setItem('siglum-sidebar-expanded', String(sidebarExpanded))
-  }, [sidebarExpanded])
+  // Save word count setting to StateStore when it changes
+  const handleShowWordCountChange = useCallback((show: boolean) => {
+    setShowWordCount(show)
+    StateStore.setShowWordCount(show)
+  }, [])
 
-  // Subscribe to git status for remote change detection
-  const hasShownRemoteModal = useRef(false)
+  // Save compile status setting to StateStore when it changes
+  const handleShowCompileStatusChange = useCallback((show: boolean) => {
+    setShowCompileStatus(show)
+    StateStore.setShowCompileStatus(show)
+  }, [])
+
+  // Subscribe to git status - only show conflict modal for actual conflicts
+  const lastSyncTimeRef = useRef<Date | null>(null)
+  const latexCodeRef = useRef(latexCode)
+  latexCodeRef.current = latexCode
+  const selectedFilePathRef = useRef(selectedFilePath)
+  selectedFilePathRef.current = selectedFilePath
   useEffect(() => {
-    const unsubscribe = GitService.subscribeStatus((status) => {
-      // Show modal when remote has changes and we haven't shown it yet this session
-      if (status.behind > 0 && !showConflictModal && !hasShownRemoteModal.current) {
-        hasShownRemoteModal.current = true
+    const unsubscribe = GitService.subscribeStatus(async (status) => {
+      // Only show modal for actual conflicts (same files edited locally and remotely)
+      if (status.hasConflict && status.conflictingFiles && status.conflictingFiles.length > 0) {
         setShowConflictModal(true)
       }
-      // Reset the flag when we're caught up
-      if (status.behind === 0) {
-        hasShownRemoteModal.current = false
+
+      // If sync happened and current file might have changed, reload it
+      if (status.lastSync && lastSyncTimeRef.current !== status.lastSync && selectedFilePath) {
+        lastSyncTimeRef.current = status.lastSync
+        // Reload the current file in case it was updated from remote
+        try {
+          const content = await FileReaderService.readFile(selectedFilePath)
+          // Guard: file may have switched during the async read
+          if (selectedFilePathRef.current !== selectedFilePath) return
+          if (content !== null && content !== latexCodeRef.current) {
+            EventBus.emit('forceEditorSync')
+            setLatexCode(content)
+          }
+        } catch {
+          // File might not exist, ignore
+        }
       }
     })
     return unsubscribe
-  }, [showConflictModal])
+  }, [selectedFilePath])
 
   const handleUseRemote = useCallback(async () => {
-    await GitService.forcePull()
-    // Reload the current file content
-    if (selectedFilePath) {
-      const content = await GitService.getFileContent(selectedFilePath)
-      if (content !== null) {
-        setLatexCode(content)
+    try {
+      await GitService.forcePull()
+      if (selectedFilePath && selectedFilePathRef.current === selectedFilePath) {
+        const content = await FileReaderService.readFile(selectedFilePath)
+        if (selectedFilePathRef.current !== selectedFilePath) return
+        if (content !== null) {
+          EventBus.emit('forceEditorSync')
+          setLatexCode(content)
+        }
       }
+      setShowConflictModal(false)
+    } catch (error) {
+      EventBus.emit('showToast', {
+        type: 'error', duration: 10000,
+        message: error instanceof Error ? error.message : 'Could not download the remote version. Please try again.',
+      })
     }
-    setShowConflictModal(false)
   }, [selectedFilePath])
 
   const handleKeepLocal = useCallback(() => {
@@ -157,153 +358,52 @@ const App: React.FC = () => {
   }, [])
 
   const handleFileSelect = useCallback(async (file: FileItem) => {
-    // Use path if available, otherwise fall back to name (for backwards compatibility)
     const filePath = file.path || `/${file.name}`
-    setSelectedFileId(file.id)
-    setSelectedFilePath(filePath)
 
-    // Load file content from GitService using the full path
-    if (GitService.getStatus().isConnected) {
-      const content = await GitService.readFile(filePath)
-      if (content !== null) {
-        setLatexCode(content)
-        // Trigger immediate compile on document switch if auto-compile is enabled
-        if (autoCompileRef.current) {
-          // Clear any pending debounced compile
-          if (compileTimeoutRef.current) {
-            clearTimeout(compileTimeoutRef.current)
-          }
-          // Defer compile to allow state to update
-          setTimeout(() => compileRef.current(), 0)
-        }
-      }
-    }
-  }, [])
-
-  const handleLatexCodeChange = useCallback((newContent: string) => {
-    setLatexCode(newContent)
-  }, [])
-
-  // Sync editor changes to git filesystem
-  useEffect(() => {
-    if (selectedFilePath && GitService.getStatus().isConnected && latexCode) {
-      GitService.writeFile(selectedFilePath, latexCode)
-    }
-  }, [latexCode, selectedFilePath])
-
-  // Compile function
-  const compile = useCallback(async () => {
-    // Use CompilerService.getStatus() directly to avoid stale closure issues
-    const currentStatus = CompilerService.getStatus()
-    if (!latexCode || currentStatus === 'compiling' || currentStatus === 'initializing') {
+    if (isImagePath(filePath)) {
+      setImageError(null)
+      setImageFilePath(filePath)
       return
     }
 
-    try {
-      const result = await CompilerService.compile(latexCode, {
-        engine: compilerSettings.compiler,
-      })
-      if (result.success && result.pdf) {
-        // Copy the bytes explicitly to avoid "detached ArrayBuffer" issues from worker transfers
-        // Use Uint8Array (not ArrayBuffer) to avoid Safari detachment issues
-        const pdfCopy = new Uint8Array(result.pdf.length)
-        pdfCopy.set(result.pdf)
-        setPdfData(pdfCopy)
-        setCompileTimeMs(result.timeMs ?? null)
-
-        // Generate format (cache preamble) after successful compile if enabled
-        if (compilerSettings.cachePreamble) {
-          CompilerService.generateFormat(latexCode, {
-            engine: compilerSettings.compiler,
-          }).catch(() => {
-            // Format generation errors are logged but don't affect the user
-          })
-        }
-      }
-    } catch {
-      // Compilation errors are shown in the UI
-    }
-  }, [latexCode, compilerSettings.compiler, compilerSettings.cachePreamble])
-
-  // Wrapper for compiler settings that handles side effects
-  const handleCompilerSettingsChange = useCallback((newSettings: typeof compilerSettings) => {
-    // If cachePreamble was just turned off, clear the format cache
-    if (compilerSettings.cachePreamble && !newSettings.cachePreamble) {
-      CompilerService.clearCache()
-    }
-    // Update auto-unload setting
-    if (compilerSettings.autoUnload !== newSettings.autoUnload) {
-      CompilerService.setAutoUnload(newSettings.autoUnload)
-    }
-    setCompilerSettings(newSettings)
-  }, [compilerSettings.cachePreamble, compilerSettings.autoUnload])
-
-  // Keep refs to avoid stale closures in callbacks
-  const compileRef = useRef(compile)
-  const latexCodeRef = useRef(latexCode)
-  const autoCompileRef = useRef(compilerSettings.autoCompile)
-  useEffect(() => {
-    compileRef.current = compile
-  }, [compile])
-  useEffect(() => {
-    latexCodeRef.current = latexCode
-  }, [latexCode])
-  useEffect(() => {
-    autoCompileRef.current = compilerSettings.autoCompile
-  }, [compilerSettings.autoCompile])
-
-  // Subscribe to compiler status
-  const prevStatusRef = useRef<CompileStatus>('idle')
-  useEffect(() => {
-    return CompilerService.onStatus((status) => {
-      const prevStatus = prevStatusRef.current
-      prevStatusRef.current = status
-      setCompileStatus(status)
-
-      // Trigger compile when initialization completes and we have content
-      if (prevStatus === 'initializing' && status === 'idle' && latexCodeRef.current && autoCompileRef.current) {
-        // Defer to allow React state to update
-        setTimeout(() => compileRef.current(), 0)
-      }
-    })
-  }, [])
-
-  // Listen for triggerCompile event from editor (Cmd+S)
-  useEffect(() => {
-    const handleTriggerCompile = () => {
-      compile()
-    }
-    window.addEventListener('triggerCompile', handleTriggerCompile)
-    return () => window.removeEventListener('triggerCompile', handleTriggerCompile)
-  }, [compile])
-
-  // Auto-compile on content change (debounced)
-  useEffect(() => {
-    // Skip if auto-compile disabled, no content, or during initial load
-    if (!compilerSettings.autoCompile || !latexCode || !isLoaded) return
-
-    // Clear previous timeout
-    if (compileTimeoutRef.current) {
-      clearTimeout(compileTimeoutRef.current)
+    if (!isTextPath(filePath)) {
+      setImageFilePath(null)
+      setImageError(`Cannot preview .${getExt(filePath)} files`)
+      return
     }
 
-    // Debounce compile by 1 second
-    compileTimeoutRef.current = window.setTimeout(() => {
-      compileRef.current()
-    }, 1000)
+    setImageFilePath(null)
+    setImageError(null)
+    await openFile(filePath)
 
-    return () => {
-      if (compileTimeoutRef.current) {
-        clearTimeout(compileTimeoutRef.current)
+    if (autoCompileRef.current) {
+      clearPendingAutoCompile()
+      setTimeout(() => compileRef.current(), 0)
+    }
+  }, [openFile, clearPendingAutoCompile, autoCompileRef, compileRef])
+
+  const handleTabClose = useCallback(async (path: string) => {
+    const isActive = path === currentFile?.path
+    // Evict from recents and cache
+    fileManager.closeFile(path)
+    if (isActive) {
+      // Switch to next recent tab
+      const remaining = getRecentPaths()
+      if (remaining.length > 0) {
+        await openFile(remaining[0])
+      } else {
+        await createNewFile()
       }
     }
-  }, [latexCode, isLoaded, compilerSettings.autoCompile])
+  }, [currentFile?.path, getRecentPaths, openFile, createNewFile])
 
-  // Auto-save with debouncing
-  const saveStatus = useAutoSave(latexCode, {
-    delay: 500,
-    onSave: updateContent
-  })
+  const saveStatus = useAutoSave(fileManager.saveQueue)
+  const handleLatexCodeChange = useCallback((newContent: string) => {
+    setLatexCode(newContent)
+    if (currentFile) {
+      fileManager.stageContent(currentFile.path, newContent)
+    }
+  }, [currentFile])
 
   // Warn before closing if there are unsaved changes
   useEffect(() => {
@@ -319,325 +419,111 @@ const App: React.FC = () => {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload)
   }, [saveStatus.hasUnsavedChanges, saveStatus.isSaving])
 
-  // DocumentManager now handles search index updates automatically
-
-  // Listen for command palette event from Monaco Editor
-  React.useEffect(() => {
-    const handleToggleCommandPalette = () => {
-      setShowCommandPalette(prev => !prev)
+  // Type-safe event subscriptions via EventBus
+  useEventBus('toggleCommandPalette', () => {
+    if (showCommandPalette) {
+      closeCommandPalette()
+    } else {
+      openCommandPalette()
     }
+  }, [showCommandPalette, closeCommandPalette, openCommandPalette])
 
-    window.addEventListener('toggleCommandPalette', handleToggleCommandPalette)
-    return () => window.removeEventListener('toggleCommandPalette', handleToggleCommandPalette)
-  }, [showCommandPalette])
-
-  // Animated close handler for command palette
-  const handleCloseCommandPalette = useCallback(() => {
-    setIsClosingCommandPalette(true)
-    setTimeout(() => {
-      setIsClosingCommandPalette(false)
-      setShowCommandPalette(false)
-    }, 200) // Match animation duration
-  }, [])
-
-  // Animated close handler for documentation modal
-  const handleCloseDocumentation = useCallback(() => {
-    setIsClosingDocumentation(true)
-    setTimeout(() => {
-      setIsClosingDocumentation(false)
-      setShowDocumentation(false)
-      setDocumentationOpenedFromPalette(false)
-    }, 200) // Match animation duration
-  }, [])
-
-  // Listen for toggleHelp event from editor toolbar
-  useEffect(() => {
-    const handleToggleHelp = () => {
-      if (showDocumentation) {
-        handleCloseDocumentation()
-      } else {
-        setShowDocumentation(true)
-      }
+  useEventBus('toggleHelp', () => {
+    if (showDocumentation) {
+      closeDocumentation()
+    } else {
+      openDocumentation(false)
     }
+  }, [showDocumentation, closeDocumentation, openDocumentation])
 
-    window.addEventListener('toggleHelp', handleToggleHelp)
-    return () => window.removeEventListener('toggleHelp', handleToggleHelp)
-  }, [showDocumentation, handleCloseDocumentation])
+  useEventBus('openIntegrations', () => {
+    openDocumentation(false, 'integrations')
+  }, [openDocumentation])
 
   // Command palette handlers
-  const handleSelectDocument = useCallback(async (documentId: string) => {
-    await loadDocument(documentId)
-  }, [loadDocument])
-
   const handleSelectFile = useCallback(async (filePath: string, lineNumber?: number) => {
-    // Find the file in projectFiles by path
-    const file = projectFiles.find(f => f.path === filePath)
-    if (file) {
-      await handleFileSelect(file)
-      // After file loads, jump to line if specified
-      if (lineNumber) {
-        // Delay to let the editor update with new content
-        setTimeout(() => {
-          window.dispatchEvent(new CustomEvent('goToLine', { detail: { line: lineNumber } }))
-        }, 100)
-      }
+    if (isImagePath(filePath)) {
+      setImageError(null)
+      setImageFilePath(filePath)
+      return
     }
-  }, [projectFiles, handleFileSelect])
+    if (!isTextPath(filePath)) {
+      setImageFilePath(null)
+      setImageError(`Cannot preview .${getExt(filePath)} files`)
+      return
+    }
+    setImageFilePath(null)
+    setImageError(null)
+    await openFile(filePath)
+    if (lineNumber) {
+      setTimeout(() => {
+        EventBus.emit('goToLine', { line: lineNumber })
+      }, 100)
+    }
+  }, [openFile])
+
+  // Handle openDocument event from outline panel (for cross-document sections)
+  useEventBus('openDocument', ({ path, line }: { path: string; line?: number }) => {
+    handleSelectFile(path, line)
+  }, [handleSelectFile])
 
   const handleCreateNewDocument = useCallback(async () => {
-    await createNewDocument()
-  }, [createNewDocument])
+    await createNewFile()
+  }, [createNewFile])
 
-  const handleCloseCurrentDocument = useCallback(async () => {
-    const recentDocs = DocumentManager.getRecentDocuments()
-    if (recentDocs.length > 1) {
-      // Switch to the second most recent document (first is current)
-      await loadDocument(recentDocs[1].id)
-    } else {
-      // Create a new document if no other documents exist
-      await createNewDocument()
-    }
-  }, [loadDocument, createNewDocument])
-
-  // Keyboard shortcuts
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Command palette shortcuts (global)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k' && !e.shiftKey && !e.altKey) {
-        e.preventDefault()
-        e.stopPropagation()
-
-        if (showCommandPalette) {
-          handleCloseCommandPalette()
-        } else {
-          // Close any open modals when opening command palette
-          if (showDocumentation) {
-            handleCloseDocumentation()
-          } else {
-            setShowDocumentation(false)
-          }
-          setIsClosingCommandPalette(false)
-          setShowCommandPalette(true)
-        }
-        return
-      }
-
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'F') {
-        e.preventDefault()
-        if (showCommandPalette) {
-          // Close with animation
-          handleCloseCommandPalette()
-        } else {
-          // Close any open modals when opening command palette
-          if (showDocumentation) {
-            handleCloseDocumentation()
-          } else {
-            setShowDocumentation(false)
-          }
-          setIsClosingCommandPalette(false)
-          setShowCommandPalette(true)
-        }
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
-        e.preventDefault()
-        handleCreateNewDocument()
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
-        e.preventDefault()
-        // Close current document (go to most recent)
-        handleCloseCurrentDocument()
-        return
-      }
-      
-      // Undo/Redo shortcuts
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        // Perform undo
-        DocumentManager.undo().then(result => {
-          if (result) {
-            setLatexCode(result.content)
-            // TODO: Restore cursor position in editor
-          }
-        })
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && ((e.shiftKey && e.key === 'z') || e.key === 'y')) {
-        e.preventDefault()
-        // Perform redo
-        DocumentManager.redo().then(result => {
-          if (result) {
-            setLatexCode(result.content)
-            // TODO: Restore cursor position in editor
-          }
-        })
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.key === 'h') {
-        e.preventDefault()
-
-        if (showDocumentation) {
-          handleCloseDocumentation()
-        } else {
-          if (showCommandPalette) {
-            setDocumentationOpenedFromPalette(true)
-            handleCloseCommandPalette()
-          } else {
-            setDocumentationOpenedFromPalette(false)
-          }
-          setShowDocumentation(true)
-        }
-        return
-      }
-      
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'E') {
-        e.preventDefault()
-        // Export current document
-        DocumentManager.exportDocument()
-        return
-      }
-      
-      // Cmd+. or Ctrl+. - toggle project sidebar
-      if ((e.metaKey || e.ctrlKey) && e.key === '.') {
-        e.preventDefault()
-        setSidebarExpanded(prev => !prev)
-        return
-      }
-
-      // Cmd+1 or Ctrl+1 - show only editor
-      if ((e.metaKey || e.ctrlKey) && e.key === '1') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(false)
-        } else {
-          setShowPreview(false) // For mobile
-        }
-      }
-      // Cmd+2 or Ctrl+2 - show editor and preview
-      else if ((e.metaKey || e.ctrlKey) && e.key === '2') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(true)
-          setTimeout(() => {
-            editorPanelRef.current?.resize(50)
-            previewPanelRef.current?.resize(50)
-          }, 0)
-        } else {
-          setShowPreview(true) // For mobile
-        }
-      }
-      // Cmd+\ or Ctrl+\ - toggle/balance panels
-      else if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
-        e.preventDefault()
-        if (window.innerWidth >= 768) {
-          setShowDesktopPreview(prev => !prev)
-          if (showDesktopPreview) {
-            setTimeout(() => {
-              editorPanelRef.current?.resize(50)
-              previewPanelRef.current?.resize(50)
-            }, 0)
-          }
-        } else {
-          setShowPreview(prev => !prev) // For mobile
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown, true)
-    return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [showCommandPalette, showDesktopPreview, showDocumentation, handleCloseCommandPalette, handleCloseDocumentation, handleCreateNewDocument, handleCloseCurrentDocument, createNewDocument, loadDocument])
-
-  // Mobile swipe gestures  
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    if (window.innerWidth >= 768) return
-    setTouchStart({ x: e.touches[0].clientX, y: e.touches[0].clientY })
-  }, [])
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    if (window.innerWidth >= 768) return
-    
-    const deltaX = e.changedTouches[0].clientX - touchStart.x
-    const deltaY = e.changedTouches[0].clientY - touchStart.y
-    
-    if (Math.abs(deltaX) > Math.abs(deltaY) && Math.abs(deltaX) > 100) {
-      if (deltaX > 0) {
-        setShowPreview(false) // Swipe right - show code
-      } else {
-        setShowPreview(true) // Swipe left - show preview
-      }
-    }
-  }, [touchStart])
-
-  // Handle text selection from editor - placeholder for future cross-highlighting
-  const handleEditorSelection = useCallback((_start: number, _end: number, _selectedText: string) => {
-    // Selection handling - could be used for cross-highlighting with PDF
+  const handleSelectCitation = useCallback((citation: CitationItem) => {
+    EventBus.emit('insertText', { text: `\\cite{${citation.citeKey}}` })
   }, [])
 
   // Modal handlers for command palette integration
   const handleOpenHelp = useCallback(() => {
-    if (showCommandPalette) {
-      setDocumentationOpenedFromPalette(true)
-      handleCloseCommandPalette() // Close command palette with animation
-    } else {
-      setDocumentationOpenedFromPalette(false)
-    }
-    setShowDocumentation(true)
-  }, [showCommandPalette, handleCloseCommandPalette])
+    openDocumentation(showCommandPalette)
+  }, [openDocumentation, showCommandPalette])
 
-  const handleBackFromDocumentation = useCallback(() => {
-    setIsClosingDocumentation(true)
-    setTimeout(() => {
-      setIsClosingDocumentation(false)
-      setShowDocumentation(false)
-      setDocumentationOpenedFromPalette(false)
-      setShowCommandPalette(true)
-    }, 200) // Match animation duration
+  const handleOpenIntegrations = useCallback(() => {
+    openDocumentation(false, 'integrations')
+  }, [openDocumentation])
+
+  // Handle citation insertion - add bibtex entry to references.bib
+  const handleCitationInsert = useCallback(async (citeKey: string, bibtex: string) => {
+    const bibPath = '/project/src/references.bib'
+
+    // Read existing content or start fresh
+    let existingContent = ''
+    try {
+      if (await fileManager.exists(bibPath)) {
+        existingContent = await fileManager.readFile(bibPath)
+      }
+    } catch {
+      // File doesn't exist yet
+    }
+
+    // Check if this citation already exists (by citeKey)
+    if (existingContent.includes(`@`) && existingContent.includes(`{${citeKey},`)) {
+      // Citation already exists, don't duplicate
+      return
+    }
+
+    // Append the new bibtex entry
+    const newContent = existingContent
+      ? `${existingContent.trimEnd()}\n\n${bibtex}`
+      : bibtex
+
+    // Write to filesystem - fileSystemWatcher will automatically update the tree
+    await fileManager.writeFile(bibPath, newContent)
   }, [])
 
-  const handleCreateFromTemplate = useCallback(async (template: string) => {
-    const DocumentManager = (await import('./services/DocumentManager')).default
-    await DocumentManager.createNew(template)
-    // Reload the current document to reflect the new creation
-    const currentDoc = DocumentManager.getCurrentDocument()
-    if (currentDoc) {
-      await loadDocument(currentDoc.id)
-    }
-  }, [loadDocument])
+  const handleEditorSelection = useCallback((_start: number, _end: number, _selectedText: string) => {
+    // reserved for future selection-based features
+  }, [])
 
   // Loading state with improved design
   if (isLoading) {
     return (
       <div className="app">
-        <div className="main-content" style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          minHeight: '100vh',
-          color: '#f5f5f7',
-          fontSize: '17px',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif',
-          fontWeight: 500,
-          letterSpacing: '-0.01em'
-        }}>
-          <div style={{ 
-            textAlign: 'center',
-            opacity: 0,
-            transform: 'translateY(12px)',
-            animation: 'fadeInUp 0.6s cubic-bezier(0.23, 1, 0.32, 1) forwards'
-          }}>
-            <div style={{ 
-              marginBottom: '20px', 
-              fontSize: '28px',
-              opacity: 0.4,
-              animation: 'spin 2s linear infinite'
-            }}>
-              ⟳
-            </div>
+        <div className="main-content app-fullscreen-state">
+          <div className="app-loading-content">
+            <div className="app-loading-spinner">⟳</div>
             Initializing Siglum...
           </div>
         </div>
@@ -645,40 +531,14 @@ const App: React.FC = () => {
     )
   }
 
-  // Error state with better design
   if (error) {
     return (
       <div className="app">
-        <div className="main-content" style={{ 
-          display: 'flex', 
-          alignItems: 'center', 
-          justifyContent: 'center',
-          minHeight: '100vh',
-          color: '#f0f0f0',
-          fontSize: '16px',
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif'
-        }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ 
-              marginBottom: '16px', 
-              fontSize: '32px',
-              color: '#ff6b6b' 
-            }}>
-              ⚠
-            </div>
-            <div style={{ color: '#ff6b6b' }}>Error: {error}</div>
-            <button 
-              onClick={() => window.location.reload()} 
-              style={{
-                marginTop: '20px',
-                padding: '8px 16px',
-                background: '#2a2a2a',
-                color: '#f0f0f0',
-                border: '1px solid #333',
-                borderRadius: '6px',
-                cursor: 'pointer'
-              }}
-            >
+        <div className="main-content app-fullscreen-state">
+          <div className="app-error-content">
+            <div className="app-error-icon"><TriangleAlert size={32} aria-hidden="true" /></div>
+            <div className="app-error-message">Error: {error}</div>
+            <button className="app-error-reload" onClick={() => window.location.reload()}>
               Reload
             </button>
           </div>
@@ -688,28 +548,30 @@ const App: React.FC = () => {
   }
 
   // Empty state for first-time users
-  if (!currentDocument) {
+  if (!currentFile) {
       return (
         <div className="app">
           <CommandPalette
             isOpen={showCommandPalette}
             isClosing={isClosingCommandPalette}
-            onClose={() => setShowCommandPalette(false)}
-            onSelectDocument={handleSelectDocument}
+            onClose={handleCloseCommandPaletteModal}
             onSelectFile={handleSelectFile}
+            onSelectCitation={handleSelectCitation}
             onCreateNew={handleCreateNewDocument}
             onOpenHelp={handleOpenHelp}
           />
-          <EmptyState
-            onOpenCommandPalette={() => setShowCommandPalette(true)}
-          />
-          <DocumentationModal
-            isOpen={showDocumentation}
-            isClosing={isClosingDocumentation}
-            onClose={handleCloseDocumentation}
-            onBack={documentationOpenedFromPalette ? handleBackFromDocumentation : undefined}
-            onCreateFromTemplate={handleCreateFromTemplate}
-          />
+          <EmptyState />
+          {showDocumentation && (
+            <Suspense fallback={null}>
+              <DocumentationModal
+                isOpen={showDocumentation}
+                isClosing={isClosingDocumentation}
+                onClose={closeDocumentation}
+                onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
+                defaultTab={documentationDefaultTab}
+              />
+            </Suspense>
+          )}
         </div>
       )
   }
@@ -717,44 +579,66 @@ const App: React.FC = () => {
   return (
     <div 
       className="app" 
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
     >
       <CommandPalette
         isOpen={showCommandPalette}
         isClosing={isClosingCommandPalette}
-        onClose={() => setShowCommandPalette(false)}
-        onSelectDocument={handleSelectDocument}
+        onClose={handleCloseCommandPaletteModal}
         onSelectFile={handleSelectFile}
+        onSelectCitation={handleSelectCitation}
         onCreateNew={handleCreateNewDocument}
         onOpenHelp={handleOpenHelp}
       />
       <div className="main-content">
         {/* Desktop: Side-by-side panels */}
-        <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
+        {!isMobile && <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
           <PanelGroup direction="horizontal" autoSaveId="editor-preview-panels">
-            <Panel ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
+            <Panel id="editor" order={1} ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
               <div className="editor-with-sidebar">
-                <ProjectSidebar
-                  isExpanded={sidebarExpanded}
-                  onToggle={() => setSidebarExpanded(prev => !prev)}
-                  files={projectFiles}
-                  onFilesChange={setProjectFiles}
-                  onFileSelect={handleFileSelect}
-                  selectedFileId={selectedFileId}
-                  triggerGitConnect={triggerGitConnect}
-                  onGitConnectTriggered={() => setTriggerGitConnect(false)}
-                />
-                <LaTeXEditor
-                  value={latexCode}
-                  onChange={handleLatexCodeChange}
-                  onSelectionChange={handleEditorSelection}
-                  compilerSettings={compilerSettings}
-                  onCompilerSettingsChange={handleCompilerSettingsChange}
-                  compileStatus={compileStatus}
-                  compileTimeMs={compileTimeMs}
-                  onCompile={compile}
-                />
+                <Suspense fallback={null}>
+                  <ProjectSidebar
+                    isExpanded={sidebarExpanded}
+                    onToggle={handleToggleSidebar}
+                    files={projectFiles}
+                    onFileSelect={handleFileSelect}
+                    selectedFileId={selectedFileId}
+                    triggerGitConnect={triggerGitConnect}
+                    onGitConnectTriggered={handleGitConnectTriggered}
+                    onOpenIntegrations={handleOpenIntegrations}
+                  />
+                </Suspense>
+                <div className="editor-with-tabs">
+                  <TabBar
+                    currentPath={currentFile?.path}
+                    onTabSelect={(path) => openFile(path)}
+                    onTabClose={handleTabClose}
+                    onTabsChanged={handleTabsChanged}
+                  />
+                  {imageFilePath || imageError ? (
+                    <div className="image-preview-pane">
+                      {imageBlobUrl && <img src={imageBlobUrl} alt={imageFilePath?.split('/').pop()} />}
+                      {imageError && <span className="image-preview-error">{imageError}</span>}
+                    </div>
+                  ) : (
+                    <LaTeXEditor
+                      value={latexCode}
+                      onChange={handleLatexCodeChange}
+
+                      documentId={currentFile?.path}
+                      compilerSettings={compilerSettings}
+                      onCompilerSettingsChange={setCompilerSettings}
+                      compileStatus={compileStatus}
+                      compileTimeMs={compileTimeMs}
+                      onCompile={compile}
+                      onCitationInsert={handleCitationInsert}
+                      showWordCount={showWordCount}
+                      onShowWordCountChange={handleShowWordCountChange}
+                      showCompileStatus={showCompileStatus}
+                      onShowCompileStatusChange={handleShowCompileStatusChange}
+                      diagnostics={diagnostics}
+                    />
+                  )}
+                </div>
               </div>
             </Panel>
             
@@ -762,105 +646,146 @@ const App: React.FC = () => {
               <>
                 <PanelResizeHandle className="resize-handle" />
 
-                <Panel ref={previewPanelRef} defaultSize={45} minSize={20}>
+                <Panel id="preview" order={2} ref={previewPanelRef} defaultSize={45} minSize={20}>
                   <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
                     <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                      <PDFViewer pdfData={pdfData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} />
+                      <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} documentId={currentFile?.path} />
                     </Suspense>
                   </div>
                 </Panel>
               </>
             )}
           </PanelGroup>
-        </div>
+        </div>}
 
         {/* Mobile: Single panel view */}
-        <div className={`mobile-view ${isLoaded ? 'loaded' : ''}`}>
-          <ProjectSidebar
-            isExpanded={sidebarExpanded}
-            onToggle={() => setSidebarExpanded(prev => !prev)}
-            files={projectFiles}
-            onFilesChange={setProjectFiles}
-            onFileSelect={handleFileSelect}
-            selectedFileId={selectedFileId}
-            triggerGitConnect={triggerGitConnect}
-            onGitConnectTriggered={() => setTriggerGitConnect(false)}
-          />
+        {isMobile && <div className={`mobile-view ${isLoaded ? 'loaded' : ''}`}>
+          <Suspense fallback={null}>
+            <ProjectSidebar
+              isExpanded={sidebarExpanded}
+              onToggle={handleToggleSidebar}
+              files={projectFiles}
+              onFileSelect={handleFileSelect}
+              selectedFileId={selectedFileId}
+              triggerGitConnect={triggerGitConnect}
+              onGitConnectTriggered={handleGitConnectTriggered}
+              onOpenIntegrations={handleOpenIntegrations}
+            />
+          </Suspense>
           {sidebarExpanded && (
             <div
               className="mobile-sidebar-overlay"
-              onClick={() => setSidebarExpanded(false)}
+              onClick={handleCollapseSidebar}
             />
           )}
-          {!showPreview ? (
-            <LaTeXEditor
-              value={latexCode}
-              onChange={handleLatexCodeChange}
-              onSelectionChange={handleEditorSelection}
-              onMenuClick={() => setSidebarExpanded(true)}
-              compilerSettings={compilerSettings}
-              onCompilerSettingsChange={handleCompilerSettingsChange}
-              compileStatus={compileStatus}
-              compileTimeMs={compileTimeMs}
-              onCompile={compile}
-            />
-          ) : (
-            <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
-              <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                <PDFViewer pdfData={pdfData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} />
-              </Suspense>
+          {imageFilePath || imageError ? (
+            <div className="image-preview-pane">
+              {imageBlobUrl && <img src={imageBlobUrl} alt={imageFilePath?.split('/').pop()} />}
+              {imageError && <span className="image-preview-error">{imageError}</span>}
             </div>
-          )}
-        </div>
+          ) : <Suspense fallback={<div className="pdf-loading">Loading editor…</div>}><MobileStudio
+            files={projectFiles}
+            pdfData={pdfData}
+            syncTexData={syncTexData}
+            showPreview={showPreview}
+            onPreviewChange={setShowPreview}
+            editorProps={{
+              value: latexCode,
+              onChange: handleLatexCodeChange,
+              onSelectionChange: handleEditorSelection,
+              onMenuClick: handleExpandSidebar,
+              documentId: currentFile?.path,
+              compilerSettings,
+              onCompilerSettingsChange: setCompilerSettings,
+              compileStatus,
+              compileTimeMs,
+              onCompile: compile,
+              onCitationInsert: handleCitationInsert,
+              showWordCount,
+              onShowWordCountChange: handleShowWordCountChange,
+              showCompileStatus,
+              onShowCompileStatusChange: handleShowCompileStatusChange,
+              diagnostics,
+            }}
+          /></Suspense>}
+        </div>}
       </div>
       
-      <DocumentationModal
-        isOpen={showDocumentation}
-        isClosing={isClosingDocumentation}
-        onClose={handleCloseDocumentation}
-        onBack={documentationOpenedFromPalette ? handleBackFromDocumentation : undefined}
-        onCreateFromTemplate={handleCreateFromTemplate}
-      />
-      {showOnboarding && (
-        <Onboarding
-          onComplete={() => setShowOnboarding(false)}
-          onExpandSidebar={() => setSidebarExpanded(true)}
-          onCollapseSidebar={() => setSidebarExpanded(false)}
-          onConnectGithub={() => {
-            setTriggerGitConnect(true)
-            setSidebarExpanded(true)
-          }}
-        />
+      {showDocumentation && (
+        <Suspense fallback={null}>
+          <DocumentationModal
+            isOpen={showDocumentation}
+            isClosing={isClosingDocumentation}
+            onClose={closeDocumentation}
+            onBack={documentationOpenedFromPalette ? backFromDocumentation : undefined}
+            defaultTab={documentationDefaultTab}
+          />
+        </Suspense>
       )}
 
-      {showConflictModal && (
-        <div className="conflict-modal-overlay">
-          <div className="conflict-modal">
-            <h3 className="conflict-modal-title">Remote Changes Detected</h3>
-            <a
-              href={`https://github.com/${GitService.getConfig()?.repoUrl}/commits`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="conflict-modal-repo"
-            >
-              {GitService.getConfig()?.repoUrl}
-            </a>
-            <p className="conflict-modal-description">
-              The remote repository has been updated since you started editing.
-              You can pull the remote changes (your local edits will be lost) or
-              continue editing (your changes will overwrite remote on next sync).
-            </p>
-            <div className="conflict-modal-actions">
-              <button className="conflict-modal-btn secondary" onClick={handleKeepLocal}>
-                Continue Editing
-              </button>
-              <button className="conflict-modal-btn primary" onClick={handleUseRemote}>
-                Use Remote Version
-              </button>
+      {showConflictModal && (() => {
+        const config = GitService.getConfig()
+        const status = GitService.getStatus()
+        const repoPath = config?.repoUrl?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
+        const currentBranch = config?.branch
+        const isSameBranch = status.conflictSource === 'same-branch'
+        const otherBranch = !isSameBranch ? status.conflictSource : undefined
+        const canShowCompare = config?.provider === 'github' && repoPath && otherBranch && currentBranch
+
+        return (
+          <div className="conflict-modal-overlay">
+            <div className="conflict-modal">
+              <h3 className="conflict-modal-title">Conflicting Changes</h3>
+              {repoPath && (
+                <a
+                  href={`https://github.com/${repoPath}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="conflict-modal-repo"
+                >
+                  {repoPath}
+                </a>
+              )}
+              {status.conflictingFiles && (
+                <ul className="conflict-modal-files">
+                  {status.conflictingFiles.map(file => (
+                    <li key={file.path}>
+                      <span className="conflict-file-name">{file.path}</span>
+                      {file.linesChanged !== undefined && (
+                        <span className="conflict-file-lines">
+                          {file.linesChanged} {file.linesChanged === 1 ? 'line' : 'lines'} different
+                        </span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <p className="conflict-modal-description">
+                This version and the GitHub version are different.
+              </p>
+              {canShowCompare && (
+                <a
+                  href={`https://github.com/${repoPath}/compare/${otherBranch}...${currentBranch}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="conflict-modal-compare-link"
+                >
+                  Compare on GitHub →
+                </a>
+              )}
+              <div className="conflict-modal-actions">
+                <button className="conflict-modal-btn secondary" onClick={handleKeepLocal}>
+                  Keep This Version
+                </button>
+                <button className="conflict-modal-btn primary" onClick={handleUseRemote}>
+                  Use Latest from GitHub
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      })()}
+      <ToastContainer />
     </div>
   )
 }
