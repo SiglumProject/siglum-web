@@ -78,3 +78,23 @@ test('Zotero proxy forwards credentials only to Zotero, never caches private dat
  expect((await request('/api/zotero/anything')).status).toBe(400)
  expect((await request('/api/zotero/users/123/items',{method:'POST'})).status).toBe(405)
 })
+
+test('deployment isolates the 2026 runtime from existing package and proxy clients',async()=>{
+ const config=Bun.TOML.parse(await Bun.file(new URL('../wrangler.toml',import.meta.url)).text()) as {name:string;routes:{pattern:string}[]}
+ expect(config.name).toBe('siglum-api-2026')
+ const patterns=config.routes.map(route=>route.pattern)
+ expect(patterns.sort()).toEqual([
+  'ctan-proxy.siglum.org/releases/tl2026-*',
+  'packages.siglum.org/api/zotero/*',
+  'packages.siglum.org/releases/tl2026-*',
+ ])
+ const legacy=['packages.siglum.org/bundles/core.data.gz','packages.siglum.org/wasm/busytex.wasm','ctan-proxy.siglum.org/api/fetch/csquotes','ctan-proxy.siglum.org/api/texlive/csquotes']
+ for(const url of legacy)expect(patterns.some(pattern=>url.startsWith(pattern.slice(0,-1)))).toBe(false)
+ for(const host of ['packages.siglum.org','ctan-proxy.siglum.org']){
+  upstream=[]
+  const response=await worker.fetch(new Request(`https://${host}/releases/tl2026-1234567890abcdef/api/texlive/releasecheck`),environment(),context)
+  expect(response.status).toBe(200)
+  if(host==='packages.siglum.org')expect(upstream.some(url=>url.endsWith('/TEXLIVE_2026'))).toBe(true)
+  expect(response.headers.get('X-TL-Year')).toBe('2026')
+ }
+})

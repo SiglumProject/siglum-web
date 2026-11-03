@@ -1,17 +1,24 @@
-name = "siglum-api"
+name = "siglum-api-2026"
 main = "src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
 [[routes]]
-pattern = "packages.siglum.org/*"
+pattern = "packages.siglum.org/releases/tl2026-*"
 zone_name = "siglum.org"
 
 [[routes]]
-pattern = "ctan-proxy.siglum.org/*"
+pattern = "ctan-proxy.siglum.org/releases/tl2026-*"
 zone_name = "siglum.org"
 
+# New citation endpoint; legacy package/proxy routes remain on siglum-api.
+[[routes]]
+pattern = "packages.siglum.org/api/zotero/*"
+zone_name = "siglum.org"
+
+# Share the bucket, but upload new assets only under releases/<releaseId>/.
+# Never replace the existing siglum-api Worker or its catch-all routes.
 # R2 bucket binding for bundles
 [[r2_buckets]]
 binding = "BUNDLES"

@@ -7,6 +7,8 @@
   bibliographies. Failed bibliography or rerun passes report errors.
 - Package sources default to 2026, with explicit older-year fallbacks isolated.
   Production preserves normalized packages and font aliases.
+- The 2026 API deploys as a separate Worker on release-prefixed routes. Existing
+  package URLs, CTAN proxy routes and stored legacy assets remain in place.
 - Immutable runtime manifests bind WASM, formats, compressed/raw bundles and
   prebuilt packages to one release. Runtime-dependent caches use that identity.
   HTTP byte ranges return exact bytes; partial responses cannot poison full caches.
@@ -23,8 +25,8 @@
 
 ## Verification
 
-The final four-repository check passes 559 tests: 61 filesystem, 16 Git,
-404 engine unit/integration, 48 real WASM browser, 25 UI and 5 API adapter tests.
+The final four-repository check passes 560 tests: 61 filesystem, 16 Git,
+404 engine unit/integration, 48 real WASM browser, 25 UI and 6 API adapter tests.
 The four-repository check covers filesystem and Git tests, engine unit/integration
 and real WASM browser compiles, UI tests, production-adapter tests, declarations,
 and the app build. Separate browser checks cover a real citation-to-PDF flow,

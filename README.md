@@ -113,9 +113,12 @@ compression utilities, so it must not replace the published 0.2.1 package.
 1. Review and push the four local commits. Publish filesystem 0.3.0 first, then
    git 0.1.0. The engine's npm release job deliberately installs the published
    filesystem dependency instead of the local development override.
-2. Deploy `worker/` from this repository with `bun run deploy:worker`. It is the
-   canonical adapter, including normalized packages, font aliases, byte ranges,
-   versioned assets and the private, read-only Zotero proxy.
+2. Deploy `worker/` with `bun run deploy:worker`. This creates the separate
+   `siglum-api-2026` Worker. Its routes cover only `/releases/tl2026-*` on the
+   package/proxy hosts, plus `/api/zotero/*` on the package host. Keep the existing
+   `siglum-api` Worker and its catch-all routes: older clients continue using the
+   existing bundles and package behavior. The new adapter includes normalized
+   packages, font aliases, byte ranges and the private, read-only Zotero proxy.
 3. In the engine repository, run `bun run stage:runtime` and verify the printed
    directory with `scripts/verify-runtime.mjs`. Review
    `DRY_RUN=1 bash scripts/release.sh 0.2.0`, then run the release script without
