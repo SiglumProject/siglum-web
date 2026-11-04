@@ -1,0 +1,75 @@
+name: Web CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: webtex/siglum-ui
+    steps:
+      - name: Check out web
+        uses: actions/checkout@v4
+        with:
+          path: webtex/siglum-ui
+          persist-credentials: false
+
+      # The frozen workspace lock resolves these packages two levels above web.
+      - name: Check out engine
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum
+          ref: a09470c50d9bf1ba11eea45d35d80b44f38b27dd
+          path: siglum-engine
+          persist-credentials: false
+
+      - name: Check out filesystem
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum-filesystem
+          ref: 11eb3f0b212a79d7b721b8d9ed70fc245648c7f1
+          path: siglum-filesystem
+          persist-credentials: false
+
+      - name: Check out Git integration
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum-git
+          ref: 5c73d16574eae7ca7c9118046d40fc1f25ff63f3
+          path: siglum-git
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.4'
+
+      - name: Install frozen workspace
+        run: bun install --frozen-lockfile --ignore-scripts
+
+      - name: Build shared packages
+        run: |
+          bun run --cwd ../../siglum-filesystem build
+          bun run --cwd ../../siglum-git build
+          bun run --cwd ../../siglum-engine build:types
+
+      - name: Check app and package Worker
+        run: |
+          bun run --cwd app test
+          node --check app/public/sw.js
+          bun run --cwd worker check
+          bun run --cwd worker test
+
+      - name: Build the local preview
+        run: bun run build:local

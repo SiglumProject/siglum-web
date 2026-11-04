@@ -1,5 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import compilerWorkerUrl from '@siglum/engine/worker?url'
 import App from './App'
 import './index.css'
 
@@ -18,6 +19,11 @@ if ('serviceWorker' in navigator && import.meta.env.PROD) {
     navigator.serviceWorker.register('/sw.js')
       .then(registration => {
         console.log('[SW] Registered:', registration.scope)
+
+        // The first compile can start before the service worker controls the page.
+        void navigator.serviceWorker.ready.then(({ active }) => {
+          active?.postMessage({ type: 'CACHE_URLS', urls: [compilerWorkerUrl] })
+        })
 
         // Check for updates periodically
         setInterval(() => {
