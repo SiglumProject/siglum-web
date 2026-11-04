@@ -67,15 +67,11 @@ local filesystem override is for development; its published dependency remains a
 normal version range.
 
 `app/.env.local-preview` configures local builds. Production builds require an
-explicit HTTPS `VITE_API_BASE` and a staged `VITE_ENGINE_RELEASE`; see `app/.env.production.example`. The former
-localhost production override has been moved to `.env.local-preview.local` on
-this computer. Do not use local preview output as a hosted release.
+explicit HTTPS `VITE_API_BASE` and a staged `VITE_ENGINE_RELEASE`. Use
+`app/.env.production.example` as the template for the hosted app.
 
-Before publication, finish the dependency releases and decide whether the deployed UI is built from this workspace or from released
-library versions. Keep the dependency versions and deployment assets in sync.
-Build against the deployed engine URL and verify the deployed TeX Live 2026
-runtime assets. Local checks do not publish packages, deploy services, or modify
-GitHub PRs.
+Build against the deployed engine URL and verify the staged TeX Live 2026
+runtime before publishing the app. See the release order below.
 
 ### Git recovery
 
@@ -106,40 +102,34 @@ wrangler r2 bucket create siglum-bundles
 
 ### Release order
 
-The candidate package versions are filesystem 0.3.0, git 0.1.0 and engine 0.2.0.
-The filesystem release removes the old worker entry point and adds shared
-compression utilities, so it must not replace the published 0.2.1 package.
-
-1. Review and push the four local commits. Publish filesystem 0.3.0 first, then
-   git 0.1.0. The engine's npm release job deliberately installs the published
-   filesystem dependency instead of the local development override.
-2. Deploy `worker/` with `bun run deploy:worker`. This creates the separate
-   `siglum-api-2026` Worker. Its routes cover only `/releases/tl2026-*` on the
-   package/proxy hosts, plus `/api/zotero/*` on the package host. Keep the existing
-   `siglum-api` Worker and its catch-all routes: older clients continue using the
-   existing bundles and package behavior. The new adapter includes normalized
-   packages, font aliases, byte ranges and the private, read-only Zotero proxy.
-3. In the engine repository, run `bun run stage:runtime` and verify the printed
-   directory with `scripts/verify-runtime.mjs`. Review
-   `DRY_RUN=1 bash scripts/release.sh 0.2.0`, then run the release script without
-   DRY_RUN when publication is authorized. Assets upload before runtime.json.
-4. Verify `https://packages.siglum.org/releases/<releaseId>` with the engine's
-   verification script. A healthy API alone does not prove the runtime exists.
-5. Set the two values in `app/.env.production.local` using the example file.
-   Build and deploy this tested workspace with `bun run deploy:pages`. Production
-   builds reject localhost and missing or malformed release IDs.
-6. Test the deployed site on desktop and a physical iPhone. Keep the previous
+1. Prepare and verify the immutable runtime in the engine checkout. A format
+   refresh such as the June 2026 update uses the engine's runtime-only release
+   path. Publish new npm versions when the library packages change.
+   [Engine release steps](https://github.com/SiglumProject/siglum/blob/main/docs/releasing.md)
+2. Deploy `worker/` with `bun run deploy:worker` for first-time setup or when
+   the adapter changes. The `siglum-api-2026` Worker serves `/releases/tl2026-*`
+   on both package hosts and `/api/zotero/*` on the package host. Keep the
+   existing `siglum-api` Worker and its catch-all routes for older clients.
+3. Verify `https://packages.siglum.org/releases/<releaseId>` with the engine's
+   `scripts/verify-runtime.mjs`. The existing release routes serve new immutable
+   runtime IDs as soon as the assets are uploaded.
+4. Run `bun run prepare:release`, then `bun run preview:release` and
+   `bun run test:release` against the staged runtime. Deploy the tested
+   artifact with `wrangler pages deploy .local-release/site --project-name siglum`.
+   For a manual production build, set both values in `app/.env.production.local`
+   using the example file.
+5. Test the deployed site on desktop and a physical iPhone. Keep the previous
    Pages deployment and old runtime directories available for rollback.
 
 The legacy unversioned `upload:r2` command is disabled. A local build, test or
 snapshot does not publish packages, upload runtime files, or deploy the site.
 
-See [release notes](RELEASE_NOTES.md) for changes, checks and remaining limitations.
+See the [initial TeX Live 2026 release notes](RELEASE_NOTES.md) for the 0.2.0 rollout.
 
 ## Dependencies
 
 Uses these separate packages:
-- [@siglum/engine](https://github.com/SiglumProject/siglum-engine) - TeX Live 2026 compiler (pdfTeX/XeTeX in WASM)
+- [@siglum/engine](https://github.com/SiglumProject/siglum) - TeX Live 2026 compiler (pdfTeX/XeTeX in WASM)
 - [@siglum/git](https://github.com/SiglumProject/siglum-git) - Browser-based Git operations
 - [@siglum/filesystem](https://github.com/SiglumProject/siglum-filesystem) - Filesystem abstraction
 
