@@ -155,7 +155,9 @@ self.addEventListener('message', (event) => {
     const urls = event.data.urls
     if (Array.isArray(urls)) {
       event.waitUntil(
-        caches.open(CACHE_NAME).then(cache => cache.addAll(urls))
+        caches.open(CACHE_NAME).then(cache => Promise.all(urls.map(async url => {
+          if (!await cache.match(url)) await cache.add(new Request(url, { cache: 'reload' }))
+        })))
       )
     }
   }
