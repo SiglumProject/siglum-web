@@ -102,9 +102,9 @@ wrangler r2 bucket create siglum-bundles
 
 ### Release order
 
-1. Prepare and verify the immutable runtime in the engine checkout. A format
-   refresh such as the June 2026 update uses the engine's runtime-only release
-   path. Publish new npm versions when the library packages change.
+1. Prepare the immutable runtime in the reviewed engine checkout. For the June
+   2026 update, upload and verify the runtime, then publish the matching
+   `@siglum/engine@0.2.1` patch before releasing the app.
    [Engine release steps](https://github.com/SiglumProject/siglum/blob/main/docs/releasing.md)
 2. Deploy `worker/` with `bun run deploy:worker` for first-time setup or when
    the adapter changes. The `siglum-api-2026` Worker serves `/releases/tl2026-*`
