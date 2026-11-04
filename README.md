@@ -4,6 +4,18 @@ Browser-based LaTeX editor that compiles entirely in your browser.
 
 **[Try it now at siglum.org](https://siglum.org)**
 
+## Hosted runtime and package API
+
+The editor loads TeX Live 2026 with the June 1 LaTeX format and fetches packages
+on demand from `packages.siglum.org`. The
+[runtime manifest](https://packages.siglum.org/releases/tl2026-82d0f37405264c2b/runtime.json)
+lists the WASM, bundles, and checksums for this release.
+
+To use the same CDN and package proxy in your own browser app, see the
+[engine setup and hosted API examples](https://github.com/SiglumProject/siglum#hosted-runtime-and-package-api).
+The [CTAN proxy guide](https://github.com/SiglumProject/siglum/blob/main/docs/ctan-proxy.md#public-package-api)
+covers the TeX Live archive, normalized package, and metadata routes.
+
 ## Structure
 
 ```
@@ -128,10 +140,11 @@ See the [initial TeX Live 2026 release notes](RELEASE_NOTES.md) for the 0.2.0 ro
 
 ## Dependencies
 
-Uses these separate packages:
-- [@siglum/engine](https://github.com/SiglumProject/siglum) - TeX Live 2026 compiler (pdfTeX/XeTeX in WASM)
-- [@siglum/git](https://github.com/SiglumProject/siglum-git) - Browser-based Git operations
-- [@siglum/filesystem](https://github.com/SiglumProject/siglum-filesystem) - Filesystem abstraction
+| Package | Used for | Source |
+| --- | --- | --- |
+| [@siglum/engine](https://www.npmjs.com/package/@siglum/engine) | TeX Live compiler (pdfTeX/XeTeX in WASM) | [siglum](https://github.com/SiglumProject/siglum) |
+| [@siglum/git](https://www.npmjs.com/package/@siglum/git) | Browser-based Git operations | [siglum-git](https://github.com/SiglumProject/siglum-git) |
+| [@siglum/filesystem](https://www.npmjs.com/package/@siglum/filesystem) | Filesystem abstraction | [siglum-filesystem](https://github.com/SiglumProject/siglum-filesystem) |
 
 ## Tech Stack
 
