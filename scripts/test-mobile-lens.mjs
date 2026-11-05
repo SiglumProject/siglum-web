@@ -1,10 +1,8 @@
-import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import assert from 'node:assert/strict';
-const require = createRequire(new URL('../app/package.json', import.meta.url));
-const { chromium, webkit } = createRequire(require.resolve('@siglum/engine'))('playwright');
+import { chromium, webkit } from 'playwright';
 const artifacts = process.env.SIGLUM_TEST_ARTIFACTS || join(tmpdir(), 'siglum-lens-tests');
 mkdirSync(artifacts, { recursive: true });
 for (const kind of (process.env.SIGLUM_TEST_BROWSER ? [process.env.SIGLUM_TEST_BROWSER] : ['chromium', 'webkit'])) {

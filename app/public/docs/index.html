@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- Static content from app/public/docs/index.md. Keep the HTML and Markdown in sync. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Use Siglum, understand local browser storage and offline compilation, and find the compiler SDK and source repositories.">
+    <meta name="theme-color" content="#191715">
+    <title>Siglum documentation | Siglum</title>
+    <link rel="canonical" href="https://siglum.org/docs/">
+    <link rel="alternate" type="text/markdown" href="/docs/index.md" title="Markdown source">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/docs/docs.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/">siglum</a>
+      <nav aria-label="Documentation">
+        <a href="/docs/" aria-current="page">Overview</a>
+        <a href="/docs/storage/">Storage and offline</a>
+        <a href="/docs/engine/">Engine and API</a>
+      </nav>
+    </header>
+    <main id="content">
+      <article>
+<h1 id="siglum-documentation">Siglum documentation</h1>
+<p>Siglum is a free, open-source LaTeX editor that compiles documents in your browser. It runs TeX Live locally. You can start editing without a Siglum account.</p>
+<h2 id="try-the-editor">Try the editor</h2>
+<ol>
+<li><a href="https://siglum.org/">Open Siglum</a> and choose <strong>Open the editor</strong>.</li>
+<li>Edit the sample document or open your LaTeX source files.</li>
+<li>Compile the document and check the PDF preview. Download the PDF when it is ready.</li>
+</ol>
+<p>The editor supports pdfLaTeX and XeLaTeX. Common packages are bundled. Additional packages are fetched as needed and cached in the browser.</p>
+<p>Your source files are stored in this browser. Offline compilation needs the engine and the document's dependencies to be cached first. Read <a href="https://siglum.org/docs/storage/">Storage and offline use</a> before relying on it away from a network connection.</p>
+<h2 id="optional-connections">Optional connections</h2>
+<p><strong>GitHub</strong> can synchronize a repository for version control and backup. Connect it in <strong>Help → Integrations</strong> using your repository and access token. Synchronization sends repository files to GitHub through the configured Git proxy.</p>
+<p><strong>Zotero</strong> can supply references to the citation picker. Connect it in <strong>Help → Integrations</strong> using your Zotero user ID and API key. Library requests use the Zotero API through Siglum's package service.</p>
+<p>These connections use your provider credentials and need a network connection for synchronization. Local editing and compilation can be used without either connection.</p>
+<h2 id="use-the-compiler-in-your-own-project">Use the compiler in your own project</h2>
+<p>The compiler is available separately as <a href="https://www.npmjs.com/package/@siglum/engine"><code>@siglum/engine</code></a>. Its JavaScript API, worker, hosted runtime, and public package proxy can be used in another browser application. See <a href="https://siglum.org/docs/engine/">Engine and package API</a> for installation and setup.</p>
+<h2 id="source-repositories">Source repositories</h2>
+<ul>
+<li><a href="https://github.com/SiglumProject/siglum-web">siglum-web</a> contains the editor and its Cloudflare package-service adapter.</li>
+<li><a href="https://github.com/SiglumProject/siglum">siglum</a> contains the compiler SDK, lazy filesystem, bundle tooling, and standalone package proxy.</li>
+<li><a href="https://github.com/SiglumProject/siglum-filesystem">siglum-filesystem</a> provides browser storage through OPFS and IndexedDB.</li>
+<li><a href="https://github.com/SiglumProject/siglum-git">siglum-git</a> provides browser Git operations and synchronization.</li>
+<li><a href="https://github.com/SiglumProject/busytex">BusyTeX fork</a> builds the matching WebAssembly compiler and TeX Live data. It builds on <a href="https://github.com/busytex/busytex">upstream BusyTeX</a>.</li>
+</ul>
+<p>Report editor problems in <a href="https://github.com/SiglumProject/siglum-web/issues">siglum-web issues</a> and compiler or package-resolution problems in <a href="https://github.com/SiglumProject/siglum/issues">siglum issues</a>. Include a small document that reproduces the problem and the browser you used.</p>
+      </article>
+    </main>
+    <footer>
+      <p><a href="/docs/index.md">Read as Markdown</a> · <a href="/">Open Siglum</a> · <a href="https://github.com/SiglumProject/siglum-web">Editor source</a></p>
+    </footer>
+  </body>
+</html>

@@ -1,5 +1,4 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { fileManager } from '../services/FileManager'
 import ZoteroIcon from './icons/ZoteroIcon'
 import './EmptyState.css'
 
@@ -90,9 +89,9 @@ const DEMO_STEPS: Record<string, { label: string; desc: string }[]> = {
   compile: [
     { label: 'Type', desc: 'LaTeX source with syntax highlighting' },
     { label: 'Save', desc: 'Auto-saves as you type' },
-    { label: 'Compile', desc: 'First compile processes the full preamble \u2014 1.2s' },
-    { label: 'Cache', desc: 'Engine state snapshotted for next time' },
-    { label: 'Recompile', desc: 'Preamble skipped \u2014 0.3s, 4\u00d7 faster' },
+    { label: 'Compile', desc: 'Compile the document in this browser' },
+    { label: 'Cache', desc: 'Engine and package files cached locally' },
+    { label: 'Recompile', desc: 'Reuse cached engine and package files' },
   ],
   writing: [
     { label: 'Before', desc: 'Markup, commands, braces \u2014 everything visible' },
@@ -143,11 +142,10 @@ const EmptyState: React.FC = () => {
   const [pkgTypedCount, setPkgTypedCount] = useState(0)
   const [tikzLinesShown, setTikzLinesShown] = useState(0)
   const [showCompileBadge, setShowCompileBadge] = useState(false)
-  const [compileTime, setCompileTime] = useState('1.2s')
   const [compileBounce, setCompileBounce] = useState(false)
   const [showSidebarFile, setShowSidebarFile] = useState(false)
   const [showSaveToast, setShowSaveToast] = useState(false)
-  const [showPreambleToast, setShowPreambleToast] = useState(false)
+  const [showDependencyToast, setShowDependencyToast] = useState(false)
   // Zotero tab state
   const [citeTypedCount, setCiteTypedCount] = useState(0)
   const [showCitePopover, setShowCitePopover] = useState(false)
@@ -186,12 +184,11 @@ const EmptyState: React.FC = () => {
     setPkgTypedCount(0)
     setTikzLinesShown(0)
     setShowCompileBadge(false)
-    setCompileTime('1.2s')
     setCompileBounce(false)
 
     setShowSidebarFile(false)
     setShowSaveToast(false)
-    setShowPreambleToast(false)
+    setShowDependencyToast(false)
     setCiteTypedCount(0)
     setShowCitePopover(false)
     setCiteSearchTyped(0)
@@ -242,25 +239,23 @@ const EmptyState: React.FC = () => {
         await wait(1800)
         if (!active) return
         setShowSaveToast(false)
-        // Step 2: Compile 1.2s
+        // Step 2: Compile locally
         await wait(600)
         if (!active) return
         setDemoStep(2)
-        setCompileTime('1.2s')
         setShowCompileBadge(true)
-        // Step 3: Preamble cached
+        // Step 3: Dependencies cached
         await wait(1400)
         if (!active) return
         setDemoStep(3)
-        setShowPreambleToast(true)
-        // Step 4: Recompile 0.3s
+        setShowDependencyToast(true)
+        // Step 4: Recompile with cached files
         await wait(1200)
         if (!active) return
-        setShowPreambleToast(false)
+        setShowDependencyToast(false)
         await wait(600)
         if (!active) return
         setDemoStep(4)
-        setCompileTime('0.3s')
         setCompileBounce(true)
         await wait(600)
         if (!active) return
@@ -459,12 +454,11 @@ const EmptyState: React.FC = () => {
     setPkgTypedCount(0)
     setTikzLinesShown(0)
     setShowCompileBadge(false)
-    setCompileTime('1.2s')
     setCompileBounce(false)
 
     setShowSidebarFile(false)
     setShowSaveToast(false)
-    setShowPreambleToast(false)
+    setShowDependencyToast(false)
     setCiteTypedCount(0)
     setShowCitePopover(false)
     setCiteSearchTyped(0)
@@ -490,9 +484,9 @@ const EmptyState: React.FC = () => {
     // Apply cumulative state up to the target step
     if (tab === 'compile') {
       if (step >= 0) { setTypedCount(TYPED_TEXT.length); setDemoPhase('idle') }
-      if (step >= 2) { setCompileTime('1.2s'); setShowCompileBadge(true) }
-      if (step >= 3) { setShowPreambleToast(true) }
-      if (step >= 4) { setShowPreambleToast(false); setCompileTime('0.3s') }
+      if (step >= 2) { setShowCompileBadge(true) }
+      if (step >= 3) { setShowDependencyToast(true) }
+      if (step >= 4) { setShowDependencyToast(false) }
     } else if (tab === 'writing') {
       if (step >= 1) { setWritingMode(true); setDemoPhase('writing') }
     } else if (tab === 'packages') {
@@ -584,6 +578,7 @@ const EmptyState: React.FC = () => {
     // Pre-create the file while fading out
     const welcomePath = '/project/src/welcome.tex'
     const openFile = async () => {
+      const { fileManager } = await import('../services/FileManager')
       if (await fileManager.exists(welcomePath)) {
         await fileManager.openFile(welcomePath)
       } else {
@@ -631,8 +626,8 @@ const EmptyState: React.FC = () => {
           <div className="logo">siglum<span>.</span></div>
           <h1>Open a tab,<br />start compiling <em>LaTeX</em>.</h1>
           <p className="hero-body">
-            A fully open-source LaTeX editor compiled to WebAssembly.
-            No compile queues, no upload, no account. Packages fetched on demand. Works offline.
+            A free, open-source LaTeX editor with TeX Live in your browser.
+            Documents are stored locally. Packages load on demand and are cached for offline compilation.
           </p>
           <div className="hero-actions">
             <button className="btn-primary" onClick={handleOpenEditor}>Open the editor</button>
@@ -640,6 +635,7 @@ const EmptyState: React.FC = () => {
               <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" /></svg>
               View source
             </a>
+            <a href="/docs/" className="btn-ghost">Documentation</a>
           </div>
         </section>
 
@@ -978,11 +974,11 @@ const EmptyState: React.FC = () => {
               </div>
             )}
 
-            {/* Preamble cached toast */}
-            {showPreambleToast && (
+            {/* Cached dependencies toast */}
+            {showDependencyToast && (
               <div className="demo-pill demo-pill--accent demo-preamble-toast">
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" /></svg>
-                Preamble cached
+                Dependencies cached
               </div>
             )}
 
@@ -991,7 +987,7 @@ const EmptyState: React.FC = () => {
             {showCompileBadge && (
               <div className={`demo-pill demo-pill--accent demo-compile-badge ${compileBounce ? 'demo-bounce' : ''}`}>
                 <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                Compiled locally — {compileTime}
+                Compiled locally
               </div>
             )}
 
@@ -1168,15 +1164,15 @@ const EmptyState: React.FC = () => {
           <div className="faq-list">
             <details className="faq-item">
               <summary>Do you store my documents?</summary>
-              <p>No. Your files stay in your browser and never touch our servers. Compilation happens locally. If you connect GitHub, your code syncs through an encrypted <a href="https://github.com/isomorphic-git/cors-proxy" target="_blank" rel="noopener noreferrer">relay</a>.</p>
+              <p>Your documents are stored in this browser and compilation runs locally. Optional GitHub sync sends the selected repository files to GitHub through a relay. <a href="/docs/storage/">Read about storage and optional connections.</a></p>
             </details>
             <details className="faq-item">
               <summary>Is my work saved?</summary>
-              <p>Yes, automatically. Everything persists in your browser. If you've connected GitHub, it syncs there too.</p>
+              <p>Edits save automatically in this browser. Clearing site data removes local storage. Export your files or use optional GitHub sync for a separate copy. <a href="/docs/storage/">Storage and offline use.</a></p>
             </details>
             <details className="faq-item">
               <summary>How is this different from Overleaf?</summary>
-              <p>Overleaf sends your documents to their servers. Siglum compiles everything locally &mdash; nothing leaves your machine. It's usually faster, works offline, and your documents stay private.</p>
+              <p>Siglum runs TeX in your browser and stores documents locally. Editing and compilation require no account. Cached dependencies support offline compilation, and the compiler is also available as an <a href="/docs/engine/">open-source npm package</a>.</p>
             </details>
             <details className="faq-item">
               <summary>Can I use custom fonts?</summary>

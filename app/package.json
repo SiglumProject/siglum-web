@@ -1,6 +1,6 @@
 {
   "name": "@siglum/app",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A LaTeX editor that runs entirely in your browser",
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,6 @@
   },
   "homepage": "https://siglum.org",
   "scripts": {
-    "postinstall": "cp node_modules/@siglum/engine/src/worker.js public/worker.js",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
@@ -26,9 +25,9 @@
     "@codemirror/view": "^6.39.6",
     "@lezer/highlight": "^1.2.3",
     "@replit/codemirror-indentation-markers": "^6.5.3",
-    "@siglum/engine": "workspace:*",
-    "@siglum/filesystem": "workspace:*",
-    "@siglum/git": "workspace:*",
+    "@siglum/engine": "^0.2.2",
+    "@siglum/filesystem": "^0.3.1",
+    "@siglum/git": "^0.1.0",
     "buffer": "^6.0.3",
     "codemirror": "^6.0.2",
     "codemirror-lang-latex": "^0.2.0",

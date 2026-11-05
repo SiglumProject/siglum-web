@@ -1,0 +1,31 @@
+# Siglum
+
+> A free, open-source LaTeX editor and reusable WebAssembly compiler SDK. TeX Live runs in the browser with on-demand package loading.
+
+The editor is available at https://siglum.org/ without a Siglum account. Source files are stored in browser storage. Offline compilation requires the app, engine, and document dependencies to be cached first. GitHub synchronization and Zotero reference lookup are optional connections that use provider credentials and network requests.
+
+## Documentation
+
+- [Overview and repository map](https://siglum.org/docs/): Editor, optional connections, and source repositories.
+- [Storage and offline use](https://siglum.org/docs/storage/): Browser origins, persistence limits, backups, and preparing a project for offline work.
+- [Engine and package API](https://siglum.org/docs/engine/): SDK setup, versioned runtime, public package service, and self-hosting.
+- [Overview Markdown](https://siglum.org/docs/index.md)
+- [Storage Markdown](https://siglum.org/docs/storage.md)
+- [Engine Markdown](https://siglum.org/docs/engine.md)
+
+## Released components
+
+- [@siglum/engine](https://www.npmjs.com/package/@siglum/engine): JavaScript API, compiler worker, and TypeScript declarations.
+- [@siglum/filesystem](https://www.npmjs.com/package/@siglum/filesystem): OPFS and IndexedDB storage.
+- [@siglum/git](https://www.npmjs.com/package/@siglum/git): Browser Git operations.
+- [Latest engine release](https://github.com/SiglumProject/siglum/releases/latest): Compatible runtime archive, manifest, and SHA-256 checksums.
+- [Latest runtime manifest](https://packages.siglum.org/latest): Automatically updated manifest for the latest published SDK.
+- [Runtime discovery metadata](https://packages.siglum.org/latest.json): Latest immutable base URL and manifest digest. Applications use the SDK's resolver to select a runtime matching their installed SDK.
+
+## Source
+
+- [Editor and hosted package-service adapter](https://github.com/SiglumProject/siglum-web)
+- [Compiler SDK, bundles, and package proxy](https://github.com/SiglumProject/siglum)
+- [Browser filesystem](https://github.com/SiglumProject/siglum-filesystem)
+- [Git connector](https://github.com/SiglumProject/siglum-git)
+- [BusyTeX compiler fork](https://github.com/SiglumProject/busytex)

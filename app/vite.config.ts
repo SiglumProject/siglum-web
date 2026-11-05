@@ -1,12 +1,20 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
+import type { UserConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import wasm from 'vite-plugin-wasm'
 import { resolve, dirname } from 'path'
 import { copyFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
+import { prerenderLanding } from './prerender'
+import { resolveInstalledRuntime } from '../scripts/hosted-runtime'
 
 // https://vite.dev/config/
-export default defineConfig(({ command }) => ({
+export default defineConfig(async ({ command, mode }): Promise<UserConfig> => {
+  const env = loadEnv(mode, __dirname, 'VITE_')
+  const hosted = !env.VITE_API_BASE && !env.VITE_ENGINE_RELEASE
+    ? await resolveInstalledRuntime(__dirname)
+    : null
+  return ({
   // Keep diagnostics in dev; remove routine logs from application and dependency bundles.
   // Warnings, errors, and compiler log callbacks remain intact.
   esbuild: command === 'build' ? { pure: ['console.log', 'console.info', 'console.debug'] } : undefined,
@@ -14,9 +22,13 @@ export default defineConfig(({ command }) => ({
     {
       name: 'sync-engine-worker',
       configResolved(config) {
+        if (hosted) {
+          config.env.VITE_API_BASE = hosted.apiBase
+          config.env.VITE_ENGINE_RELEASE = hosted.releaseId
+        }
         const api = config.env.VITE_API_BASE
         if (config.command === 'build' && config.mode === 'production') {
-          if (!/^tl2026-[a-f0-9]{16}$/.test(config.env.VITE_ENGINE_RELEASE || '')) throw new Error('Production builds require VITE_ENGINE_RELEASE from the staged runtime manifest.');
+          if (!/^tl\d{4}-[a-f0-9]{16}$/.test(config.env.VITE_ENGINE_RELEASE || '')) throw new Error('Production builds require VITE_ENGINE_RELEASE from the staged runtime manifest.');
           if (!api) throw new Error('Set VITE_API_BASE to the deployed engine for a production build. Use bun run build:local for local preview.')
           const hostname = new URL(api).hostname
           if (new URL(api).protocol !== 'https:' || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname === '127.0.0.1' || hostname === '[::1]') {
@@ -32,9 +44,14 @@ export default defineConfig(({ command }) => ({
     },
     react(),
     wasm(),
+    prerenderLanding(),
   ],
   define: {
     global: 'globalThis',
+    ...(hosted ? {
+      'import.meta.env.VITE_API_BASE': JSON.stringify(hosted.apiBase),
+      'import.meta.env.VITE_ENGINE_RELEASE': JSON.stringify(hosted.releaseId),
+    } : {}),
   },
   optimizeDeps: {
     exclude: ['blake3-wasm', '@siglum/filesystem', '@siglum/engine'],
@@ -77,6 +94,7 @@ export default defineConfig(({ command }) => ({
     },
   },
   server: {
+    port: 5174,
     proxy: {
       '/citations/api/zotero': {
         target: 'https://api.zotero.org',
@@ -105,4 +123,5 @@ export default defineConfig(({ command }) => ({
       'Cross-Origin-Embedder-Policy': 'require-corp',
     },
   },
-}))
+  })
+})

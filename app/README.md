@@ -1,32 +1,20 @@
-# Siglum
+# Siglum editor
 
-A LaTeX editor that runs entirely in your browser. No accounts. No server round-trips. Write from anywhere.
+The React frontend for [Siglum](https://siglum.org/), with a CodeMirror LaTeX
+editor, PDF.js preview, local document storage, and browser compilation.
 
-**[Try it now at siglum.org](https://siglum.org)**
+## Quick start
 
-## Development
+From the repository root:
 
-```bash
-# Install dependencies
+```sh
 bun install
-
-# Start development server
 bun run dev
-
-# Build for production
-bun run build
-
-# Preview production build
-bun run preview
 ```
 
-## Tech Stack
+Open the local URL printed by Vite. The published libraries and hosted runtime
+are used automatically.
 
-- React 18 + TypeScript
-- Vite
-- CodeMirror 6 (editor)
-- pdf.js (PDF rendering)
+[User docs](public/docs/index.md) · [Development](../docs/development.md)
 
-## License
-
-MIT
+MIT licensed.

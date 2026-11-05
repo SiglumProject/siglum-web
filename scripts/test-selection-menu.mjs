@@ -1,9 +1,7 @@
 // Real local compiler and native source selection/right-click in Chromium and WebKit.
-import { createRequire } from 'node:module'
 import { mkdirSync } from 'node:fs'
 import assert from 'node:assert/strict'
-const require = createRequire(new URL('../app/package.json', import.meta.url))
-const { chromium, webkit } = createRequire(require.resolve('@siglum/engine'))('playwright')
+import { chromium, webkit } from 'playwright'
 const artifacts = process.env.SIGLUM_TEST_ARTIFACTS || '/tmp/siglum-selection-menu'
 mkdirSync(artifacts, { recursive: true })
 const source = String.raw`\documentclass{article}
