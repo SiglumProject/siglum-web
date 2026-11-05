@@ -1,5 +1,5 @@
 /** Local development across the four repositories. No publish or Git mutations. */
-import { resolve } from 'node:path'
+import { relative, resolve } from 'node:path'
 import { existsSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 
@@ -26,13 +26,36 @@ function checkAssets() {
     if (!existsSync(resolve(repos.engine, path))) throw new Error(`Missing engine runtime: ${path}. Restore/build the TeX Live 2026 assets first.`)
   }
 }
+async function installSourceWorkspace() {
+  const workspace = resolve(ui, '.local-release/workspace')
+  const directories = [ui, resolve(ui, 'app'), resolve(ui, 'worker'), repos.filesystem, repos.git, repos.engine]
+  const manifests = await Promise.all(directories.map(directory => Bun.file(resolve(directory, 'package.json')).json()))
+  const libraries = manifests.slice(3)
+  for (const consumer of manifests) {
+    for (const library of libraries) {
+      const range = consumer.dependencies?.[library.name] ?? consumer.devDependencies?.[library.name] ?? consumer.peerDependencies?.[library.name]
+      if (range && !range.startsWith('workspace:') && !Bun.semver.satisfies(library.version, range)) {
+        throw new Error(`${consumer.name} requires ${library.name}@${range}, but the source checkout is ${library.version}`)
+      }
+    }
+  }
+  // Include the web root so its development tools remain visible to app/.
+  // This private install has its own lockfile and leaves the default lock intact.
+  await Bun.write(resolve(workspace, 'package.json'), JSON.stringify({
+    name: 'siglum-local-workspace',
+    private: true,
+    packageManager: manifests[0].packageManager,
+    workspaces: directories.map(directory => relative(workspace, directory).replaceAll('\\', '/')),
+    devDependencies: manifests[0].devDependencies,
+  }, null, 2) + '\n')
+  await run(workspace, 'install', '--ignore-scripts')
+}
 async function prepare() {
-  await run(ui, 'install', '--frozen-lockfile', '--ignore-scripts')
+  await installSourceWorkspace()
   await run(repos.filesystem, 'run', 'build')
   await run(repos.git, 'run', 'build')
   await run(repos.engine, 'run', 'build:types')
   await run(repos.engine, 'run', 'prepare:runtime')
-  await run(resolve(ui, 'app'), 'run', 'postinstall')
   checkAssets()
 }
 async function check() {
@@ -59,8 +82,8 @@ async function start(lan = false) {
   process.once('SIGINT', stop)
   process.once('SIGTERM', stop)
   const endpoints = [
-    { url: 'http://127.0.0.1:8787/health', cwd: repos.engine, args: ['run', 'dev'], signature: 'siglum-local-dev' },
-    { url: uiUrl, cwd: resolve(ui, 'app'), args: ['run', 'dev', '--host', uiHost, '--port', '5174'], signature: '/src/main.tsx' },
+    { url: 'http://127.0.0.1:8787/health', cwd: repos.engine, args: ['run', 'dev'], signature: 'siglum-local-dev', env: process.env },
+    { url: uiUrl, cwd: resolve(ui, 'app'), args: ['run', 'dev', '--host', uiHost, '--port', '5174'], signature: '/src/main.tsx', env: { ...process.env, VITE_API_BASE: `${uiUrl}engine` } },
   ]
   try {
     for (const endpoint of endpoints) {
@@ -70,7 +93,7 @@ async function start(lan = false) {
         console.log(`Already running: ${endpoint.url}`)
         continue
       }
-      children.push(Bun.spawn([bun, ...endpoint.args], { cwd: endpoint.cwd, stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' }))
+      children.push(Bun.spawn([bun, ...endpoint.args], { cwd: endpoint.cwd, env: endpoint.env, stdout: 'inherit', stderr: 'inherit', stdin: 'inherit' }))
     }
     console.log(`Siglum: ${uiUrl} (Ctrl+C stops only servers started by this command)`)
     if (children.length) {

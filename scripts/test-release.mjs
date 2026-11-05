@@ -1,11 +1,9 @@
 // Test a staged local preview, or set SIGLUM_TEST_URL to verify a real deployment without intercepting its network.
-import {createRequire} from 'node:module';
 import {readFileSync,mkdirSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('../',import.meta.url));
-const require=createRequire(new URL('../app/package.json',import.meta.url));
-const {chromium,webkit}=createRequire(require.resolve('@siglum/engine'))('playwright');
+import { chromium, webkit } from 'playwright';
 const {releaseId}=JSON.parse(readFileSync(resolve(root,'../../siglum-engine/.local-release/current.json'),'utf8'));
 const target=process.env.SIGLUM_TEST_URL || 'http://127.0.0.1:5175/';
 const remote=Boolean(process.env.SIGLUM_TEST_URL);

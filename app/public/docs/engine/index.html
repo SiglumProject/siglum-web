@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<!-- Static content from app/public/docs/engine.md. Keep the HTML and Markdown in sync. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Embed the Siglum WebAssembly LaTeX compiler, use the released TeX Live runtime and public package proxy, or host your own assets.">
+    <meta name="theme-color" content="#191715">
+    <title>Engine and package API | Siglum</title>
+    <link rel="canonical" href="https://siglum.org/docs/engine/">
+    <link rel="alternate" type="text/markdown" href="/docs/engine.md" title="Markdown source">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/docs/docs.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/">siglum</a>
+      <nav aria-label="Documentation">
+        <a href="/docs/">Overview</a>
+        <a href="/docs/storage/">Storage and offline</a>
+        <a href="/docs/engine/" aria-current="page">Engine and API</a>
+      </nav>
+    </header>
+    <main id="content">
+      <article>
+<h1 id="engine-and-package-api">Engine and package API</h1>
+<p>Siglum's compiler can be embedded in another browser application. The released SDK is <a href="https://www.npmjs.com/package/@siglum/engine"><code>@siglum/engine</code></a>. Browser storage is provided by <a href="https://www.npmjs.com/package/@siglum/filesystem"><code>@siglum/filesystem</code></a>, and the optional Git connector is <a href="https://www.npmjs.com/package/@siglum/git"><code>@siglum/git</code></a>.</p>
+<h2 id="sdk-and-runtime">SDK and runtime</h2>
+<p>The npm engine package contains the JavaScript API, worker, and TypeScript declarations. The WebAssembly binary, LaTeX formats, fonts, and package bundles are separate runtime assets.</p>
+<p>Use <a href="https://packages.siglum.org/latest"><code>packages.siglum.org/latest</code></a> to inspect the latest published runtime manifest, or <a href="https://packages.siglum.org/latest.json"><code>latest.json</code></a> for its discovery metadata. Releases update these links automatically. The manifest records the engine version, TeX Live year, release ID, file sizes, and SHA-256 checksums. The <a href="https://github.com/SiglumProject/siglum/releases/latest">GitHub release</a> also provides the runtime archive.</p>
+<p>For an application, <code>resolveRuntime()</code> selects the runtime compatible with its installed SDK and verifies the manifest's digest and identity. It returns immutable asset URLs; a running compiler keeps using those URLs when a newer release appears. No release hash needs to be copied into the application.</p>
+<p>The editor exposes pdfLaTeX and XeLaTeX. The underlying <a href="https://github.com/SiglumProject/busytex">BusyTeX fork</a> also builds the tools and data used to produce this runtime.</p>
+<h2 id="browser-integration">Browser integration</h2>
+<p>Install the SDK:</p>
+<pre><code class="language-sh">npm install @siglum/engine
+</code></pre>
+<p>For Vite, apply the <a href="https://github.com/SiglumProject/siglum/blob/main/docs/usage.md#usage-with-bundlers-vite-webpack-etc">SDK's bundler configuration</a>. It includes the workaround required for the optional BLAKE3 dependency. Resolve the runtime once, then pass it with the exported worker URL:</p>
+<pre><code class="language-js">import { SiglumCompiler, resolveRuntime } from '@siglum/engine';
+import workerUrl from '@siglum/engine/worker?url';
+
+const runtime = await resolveRuntime();
+const compiler = new SiglumCompiler({
+  ...runtime,
+  workerUrl,
+});
+
+await compiler.init();
+const result = await compiler.compile(String.raw`\documentclass{article}
+\begin{document}
+Hello from Siglum.
+\end{document}`);
+
+if (!result.success) throw new Error(result.error || 'Compilation failed');
+const pdf = new Blob([result.pdf], { type: 'application/pdf' });
+</code></pre>
+<p>The <code>?url</code> import is Vite syntax. Other bundlers can copy the package's worker into their public assets and pass its served URL. Keep that worker in sync with the engine package.</p>
+<p>The resolver caches a verified descriptor and manifest together in Cache Storage. If the network is unavailable, it can reopen that same SDK's verified runtime selection. Offline compilation also requires the runtime files and document dependencies to have been cached; resolving metadata alone does not download them. Invalid metadata fails verification instead of silently selecting another runtime.</p>
+<p>Serve browser applications over HTTPS or localhost for browser storage and service-worker support. The engine can compile without SharedArrayBuffer. These response headers enable its faster SharedArrayBuffer-based lazy-file path:</p>
+<pre><code class="language-http">Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+</code></pre>
+<h2 id="public-package-proxy">Public package proxy</h2>
+<p>The resolved base also provides package archives, normalized files, and metadata. For a shell example, discover the latest base and its TeX Live year with <code>curl</code> and <code>jq</code>:</p>
+<pre><code class="language-sh">runtime=&quot;$(curl -fsS https://packages.siglum.org/latest.json)&quot;
+base=&quot;$(printf '%s' &quot;$runtime&quot; | jq -er .baseUrl)&quot;
+manifest_url=&quot;$(printf '%s' &quot;$runtime&quot; | jq -er .manifestUrl)&quot;
+year=&quot;$(curl -fsS &quot;$manifest_url&quot; | jq -er .texLiveYear)&quot;
+
+curl -fL &quot;$base/api/texlive/csquotes?tlYear=$year&quot; -o csquotes.tar.xz
+curl -fsS &quot;$base/api/fetch/acrotex?tlYear=$year&quot;
+curl -fsS &quot;$base/api/ctan-pkg/enumitem&quot;
+</code></pre>
+<p>The first request returns a TeX Live archive. The second returns normalized package files as JSON. Both use the manifest's TeX Live year. The third returns CTAN package metadata. Read the <a href="https://github.com/SiglumProject/siglum/blob/main/docs/ctan-proxy.md#public-package-api">public package API guide</a> for routes and behavior.</p>
+<h2 id="host-it-yourself">Host it yourself</h2>
+<p>The runtime and package proxy can be hosted independently of Siglum's editor. Keep the engine, worker, and runtime assets from compatible releases together. Static hosting serves the runtime files; on-demand package requests also need a package-service implementation.</p>
+<p>Follow the <a href="https://github.com/SiglumProject/siglum/blob/main/docs/self-hosting.md">self-hosting guide</a> or <a href="https://github.com/SiglumProject/siglum/blob/main/docs/building.md">build the compiler from source</a>. For cached dependencies and the limits of browser persistence, see <a href="https://siglum.org/docs/storage/">Storage and offline use</a>.</p>
+      </article>
+    </main>
+    <footer>
+      <p><a href="/docs/engine.md">Read as Markdown</a> · <a href="/">Open Siglum</a> · <a href="https://github.com/SiglumProject/siglum-web">Editor source</a></p>
+    </footer>
+  </body>
+</html>

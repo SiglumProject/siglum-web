@@ -1,5 +1,20 @@
 /* Landing Page */
 
+[data-prerendered] .logo,
+[data-prerendered] .hero h1,
+[data-prerendered] .hero-body,
+[data-prerendered] .hero-actions,
+[data-prerendered] .editor-window,
+[data-prerendered] .reveal {
+  opacity: 1;
+  transform: none;
+  animation: none;
+}
+
+[data-prerendered] .landing-nav {
+  display: none;
+}
+
 .landing {
   /* Landing-scoped fonts (reference global vars) */
   --landing-font-mono: var(--font-mono);

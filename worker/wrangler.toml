@@ -4,6 +4,23 @@ compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+# Discovery is mutable metadata; runtime asset URLs stay under releases/.
+[[routes]]
+pattern = "packages.siglum.org/latest"
+zone_name = "siglum.org"
+
+[[routes]]
+pattern = "packages.siglum.org/latest/*"
+zone_name = "siglum.org"
+
+[[routes]]
+pattern = "packages.siglum.org/latest.json*"
+zone_name = "siglum.org"
+
+[[routes]]
+pattern = "packages.siglum.org/engines/*"
+zone_name = "siglum.org"
+
 [[routes]]
 pattern = "packages.siglum.org/releases/tl2026-*"
 zone_name = "siglum.org"

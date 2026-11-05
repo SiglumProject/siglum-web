@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!-- Static content from app/public/docs/storage.md. Keep the HTML and Markdown in sync. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="How Siglum stores documents in OPFS or IndexedDB, how browser origins and backups work, and how to prepare for offline LaTeX compilation.">
+    <meta name="theme-color" content="#191715">
+    <title>Storage and offline use | Siglum</title>
+    <link rel="canonical" href="https://siglum.org/docs/storage/">
+    <link rel="alternate" type="text/markdown" href="/docs/storage.md" title="Markdown source">
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/docs/docs.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#content">Skip to content</a>
+    <header class="site-header">
+      <a class="brand" href="/">siglum</a>
+      <nav aria-label="Documentation">
+        <a href="/docs/">Overview</a>
+        <a href="/docs/storage/" aria-current="page">Storage and offline</a>
+        <a href="/docs/engine/">Engine and API</a>
+      </nav>
+    </header>
+    <main id="content">
+      <article>
+<h1 id="storage-and-offline-use">Storage and offline use</h1>
+<p>Siglum compiles LaTeX on your device. Source files, editor state, and downloaded dependencies use browser storage.</p>
+<h2 id="where-your-work-lives">Where your work lives</h2>
+<p>The editor uses the browser's Origin Private File System (OPFS) when it is available and writable. IndexedDB provides a fallback. The filesystem remembers the selected backend and can recover existing IndexedDB documents when an older installation selected an empty OPFS store.</p>
+<p>Storage belongs to a particular site origin and browser profile. An origin includes the protocol, host, and port. Your work on <code>https://siglum.org</code> and your work on a local development server occupy separate storage. Use an exported copy or a Git repository to move a project between them.</p>
+<p>Browser storage is not a backup. Clearing site data, removing a browser profile, private-browsing cleanup, or browser storage eviction can remove documents and cached dependencies. Keep an external copy of your source files or synchronize a repository with the optional GitHub connection.</p>
+<h2 id="prepare-for-offline-work">Prepare for offline work</h2>
+<ol>
+<li>Open the editor while online and load your project.</li>
+<li>Compile the documents you plan to work on. This downloads the engine, packages, and fonts those documents need.</li>
+<li>Disconnect from the network, reopen the editor, and compile an edit to confirm that the project is ready.</li>
+</ol>
+<p>The app caches its shell and runtime assets. The engine also caches downloaded TeX dependencies. A document that introduces an uncached package or font needs a connection to fetch it. A new runtime release can need its own downloads because caches are separated by runtime version.</p>
+<p>GitHub synchronization and Zotero library requests need a network connection. Keep the source and bibliography files you need in the project before going offline.</p>
+<h2 id="what-uses-the-network">What uses the network</h2>
+<ul>
+<li>The editor downloads its application files, compiler runtime, and requested TeX packages or fonts.</li>
+<li>Connecting GitHub synchronizes the selected repository through the configured Git proxy.</li>
+<li>Connecting Zotero sends authenticated library requests through the package service to Zotero.</li>
+</ul>
+<p>Compilation runs in the browser. The package service supplies TeX dependencies; your document is compiled locally.</p>
+<h2 id="if-saved-work-does-not-reopen">If saved work does not reopen</h2>
+<p>Return to the same site and browser profile where you saved it. If the editor reports a temporary storage-access error, use its reload control to retry. An error reading a file can differ from a file that has been deleted, so preserve the browser's existing site data while investigating.</p>
+<p>Recovery after site data has been removed depends on an exported or synchronized copy. <a href="https://siglum.org/docs/#optional-connections">GitHub integration</a> is one way to keep that copy outside the browser.</p>
+<p>For implementation details, see the <a href="https://github.com/SiglumProject/siglum-filesystem#readme"><code>@siglum/filesystem</code> README</a> and the <a href="https://github.com/SiglumProject/siglum-web/blob/main/docs/development.md#git-recovery">editor's Git recovery documentation</a>.</p>
+      </article>
+    </main>
+    <footer>
+      <p><a href="/docs/storage.md">Read as Markdown</a> · <a href="/">Open Siglum</a> · <a href="https://github.com/SiglumProject/siglum-web">Editor source</a></p>
+    </footer>
+  </body>
+</html>

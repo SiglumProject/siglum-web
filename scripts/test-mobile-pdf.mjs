@@ -1,11 +1,9 @@
 // Run against a local dev server; all documents live in isolated browser contexts.
 // Chromium uses native touch input. WebKit exercises the touch handlers synthetically.
-import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-const require = createRequire(new URL('../app/package.json', import.meta.url));
-const { chromium, webkit } = createRequire(require.resolve('@siglum/engine'))('playwright');
+import { chromium, webkit } from 'playwright';
 const base = process.env.SIGLUM_TEST_URL || 'http://127.0.0.1:5174/';
 const artifacts = process.env.SIGLUM_TEST_ARTIFACTS || join(tmpdir(), 'siglum-pdf-tests');
 mkdirSync(artifacts, { recursive: true });

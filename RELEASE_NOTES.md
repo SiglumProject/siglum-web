@@ -36,7 +36,7 @@ keyboard-height layouts, PDF scrolling/zoom/night mode and lens panning.
 Runtime candidate: `tl2026-a609e31ad3926333` (164 files, all SHA-256 verified).
 The staged production build is exercised locally against the exact immutable
 runtime. Remote upload and deployment are separate steps, followed by remote
-checksum verification. See README.md for the release order.
+checksum verification.
 
 ## Known limits and device confirmation
 

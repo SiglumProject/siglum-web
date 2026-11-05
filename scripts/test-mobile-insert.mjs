@@ -1,10 +1,8 @@
 // Isolated phone-sized UI tests; the keyboard is represented by viewport resizing.
-import { createRequire } from 'node:module';
 import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-const require = createRequire(new URL('../app/package.json', import.meta.url));
-const { chromium, webkit } = createRequire(require.resolve('@siglum/engine'))('playwright');
+import { chromium, webkit } from 'playwright';
 const artifacts = process.env.SIGLUM_TEST_ARTIFACTS || join(tmpdir(), 'siglum-insert-tests');
 mkdirSync(artifacts, { recursive: true });
 import assert from 'node:assert/strict';

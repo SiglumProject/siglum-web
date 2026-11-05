@@ -1,0 +1,51 @@
+:root {
+  color-scheme: dark;
+  --background: #191715;
+  --surface: #24211e;
+  --text: #efeae3;
+  --muted: #beb6aa;
+  --link: #edb19a;
+  --line: #484139;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.65;
+}
+
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--background); color: var(--text); }
+a { color: var(--link); text-underline-offset: 0.2em; }
+a:hover { text-decoration-thickness: 2px; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 4px; }
+.skip-link { position: absolute; top: -5rem; left: 1rem; padding: 0.5rem 1rem; background: var(--surface); }
+.skip-link:focus { top: 0.5rem; }
+.site-header, main, footer { width: min(100% - 2.5rem, 48rem); margin-inline: auto; }
+.site-header { padding-block: 1.5rem; border-bottom: 1px solid var(--line); }
+.brand { color: var(--text); font-size: 1.25rem; font-weight: 700; text-decoration: none; }
+nav { display: flex; flex-wrap: wrap; gap: 0.4rem 1.2rem; margin-top: 0.75rem; }
+nav a { min-height: 2.5rem; display: inline-flex; align-items: center; }
+nav a[aria-current="page"] { color: var(--text); font-weight: 600; }
+main { padding-block: 2.25rem; }
+h1, h2 { line-height: 1.25; letter-spacing: -0.02em; }
+h1 { font-size: clamp(1.9rem, 5vw, 2.65rem); margin: 0 0 1.5rem; }
+h2 { font-size: 1.35rem; margin: 2.25rem 0 0.75rem; }
+p, ul, ol, pre { margin: 0 0 1.25rem; }
+li + li { margin-top: 0.6rem; }
+ul, ol { padding-left: 1.4rem; }
+code { font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 0.88em; overflow-wrap: anywhere; }
+p code, li code { background: var(--surface); padding: 0.1em 0.25em; border-radius: 3px; }
+pre { background: var(--surface); padding: 1rem; overflow-x: auto; border-radius: 6px; line-height: 1.55; }
+pre code { overflow-wrap: normal; }
+footer { border-top: 1px solid var(--line); padding-block: 1.25rem 2rem; color: var(--muted); font-size: 0.9rem; }
+footer p { margin: 0; }
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --background: #fbfaf7;
+    --surface: #eeebe5;
+    --text: #29241f;
+    --muted: #645b51;
+    --link: #934329;
+    --line: #cec7bc;
+  }
+}

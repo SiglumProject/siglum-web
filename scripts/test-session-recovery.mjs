@@ -1,6 +1,4 @@
-import {createRequire} from 'node:module';
-const require=createRequire(new URL('../app/package.json',import.meta.url));
-const {chromium,webkit}=createRequire(require.resolve('@siglum/engine'))('playwright');
+import { chromium, webkit } from 'playwright';
 const target=process.env.SIGLUM_TEST_URL || 'http://127.0.0.1:5176/';
 import assert from 'node:assert/strict';
 const source=String.raw`\documentclass{article}

@@ -1,6 +1,6 @@
 {
   "name": "@siglum/worker",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "scripts": {
     "dev": "wrangler dev",
@@ -13,7 +13,7 @@
     "lzma": "^2.3.2",
     "xz-decompress": "^0.2.3",
     "xzwasm": "^0.1.2",
-    "@siglum/engine": "workspace:*"
+    "@siglum/engine": "^0.2.2"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20241127.0",

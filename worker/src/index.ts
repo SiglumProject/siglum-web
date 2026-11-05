@@ -5,6 +5,7 @@
 //   + /api/texlive/{pkg} - Raw TexLive .tar.xz proxy (client decompresses)
 
 import { unzipSync } from 'fflate';
+import { handleRuntimeDiscovery } from './runtime-discovery';
 
 // ============================================================================
 // TexLive Configuration
@@ -163,6 +164,9 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
     const hostname = url.hostname;
+
+    const discovery = await handleRuntimeDiscovery(url, request, env.BUNDLES, CORS_HEADERS);
+    if (discovery) return discovery;
 
     // Handle CORS preflight
     if (request.method === 'OPTIONS') {
