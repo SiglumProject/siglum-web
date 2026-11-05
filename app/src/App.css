@@ -75,6 +75,8 @@
 }
 
 .app-error-content {
+  width: min(100%, 32rem);
+  padding: 16px;
   text-align: center;
 }
 
@@ -88,8 +90,38 @@
   color: var(--color-error, #ff6b6b);
 }
 
-.app-error-reload {
+.app-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
   margin-top: 20px;
+}
+
+.app-error-files {
+  margin-top: 16px;
+}
+
+.app-error-files summary {
+  cursor: pointer;
+}
+
+.app-error-files ul {
+  display: grid;
+  gap: 6px;
+  max-height: 28vh;
+  overflow: auto;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.app-error-files button {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.app-error-reload {
   padding: 8px 16px;
   background: var(--color-base-lighter, #2a2a2a);
   color: var(--color-text-primary);

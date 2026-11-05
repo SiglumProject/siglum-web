@@ -7,6 +7,42 @@ const source=String.raw`\documentclass{article}
 \begin{document}
 SESSION-RESTORE-KEEPS-MY-DRAFT
 \end{document}`;
+const welcomePath = '/project/src/welcome.tex';
+const draftPath = '/project/src/untitled.tex';
+
+// Remove only the sample in this test profile to model a stale saved selection.
+const accessWelcome = (page, backend, remove = false) => page.evaluate(async ({ backend, remove }) => {
+ if (backend === 'opfs') {
+  const root = await navigator.storage.getDirectory();
+  const project = await (await root.getDirectoryHandle('siglum-files')).getDirectoryHandle('src');
+  if (remove) await project.removeEntry('welcome.tex');
+  try {
+   await project.getFileHandle('welcome.tex');
+   return true;
+  } catch (error) {
+   if (error.name !== 'NotFoundError') throw error;
+   return false;
+  }
+ }
+ const db = await new Promise((resolve, reject) => {
+  const request = indexedDB.open('siglum_filesystem');
+  request.onsuccess = () => resolve(request.result);
+  request.onerror = () => reject(request.error);
+ });
+ try {
+  return await new Promise((resolve, reject) => {
+   const transaction = db.transaction('files', remove ? 'readwrite' : 'readonly');
+   const files = transaction.objectStore('files');
+   if (remove) files.delete('/src/welcome.tex');
+   const count = files.count('/src/welcome.tex');
+   transaction.oncomplete = () => resolve(count.result > 0);
+   transaction.onabort = () => reject(transaction.error);
+  });
+ } finally {
+  db.close();
+ }
+}, { backend, remove });
+
 for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webkit',false]]) {
  const browser=await(kind==='chromium'?chromium.launch():webkit.launch({executablePath:process.env.SIGLUM_WEBKIT_EXECUTABLE}));
  try{
@@ -37,6 +73,8 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
    await page.evaluate(legacy=>{sessionStorage.setItem('test-storage-failure','1');if(legacy)localStorage.removeItem('siglum-filesystem-backend')},legacy);
    await page.reload();await page.getByText('Your document storage is temporarily unavailable.',{exact:false}).waitFor();
    assert.equal(await page.getByRole('button',{name:'Open the editor',exact:true}).count(),0);
+   assert.equal(await page.locator('summary').filter({ hasText: 'Choose another file' }).count(), 0);
+   assert.equal(await page.getByRole('button', { name: 'New document', exact: true }).count(), 0);
    assert.equal(await page.evaluate(()=>localStorage.getItem('siglum_current_file')),'/project/src/untitled.tex');
    const stored=await page.evaluate(async()=>{const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('siglum-files');const src=await root.getDirectoryHandle('src');return(await(await src.getFileHandle('untitled.tex')).getFile()).text()});assert.equal(stored,source);
    await page.evaluate(()=>sessionStorage.removeItem('test-storage-failure'));
@@ -54,9 +92,41 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
   await page.getByRole('button',{name:'Reload',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
   console.log('PASS',kind,'legacy inaccessible storage recovers without pinning an empty fallback');
  }
- // A missing selected document must not silently open welcome and overwrite the pointer.
- await page.evaluate(()=>localStorage.setItem('siglum_current_file','/project/src/missing-session.tex'));await page.reload();await page.getByText('Could not reopen "missing-session.tex".',{exact:false}).waitFor();assert.equal(await page.evaluate(()=>localStorage.getItem('siglum_current_file')),'/project/src/missing-session.tex');assert.equal(await page.getByRole('button',{name:'Open the editor',exact:true}).count(),0);
- await page.evaluate(()=>localStorage.setItem('siglum_current_file','/project/src/untitled.tex'));await page.getByRole('button',{name:'Reload',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
- assert.deepEqual(errors,[]);console.log('PASS',kind,'saved selection retained on read failure and restored on retry');
+ // The saved welcome selection is stale. Startup must preserve it and offer
+ // recovery without writing a replacement welcome or touching the saved draft.
+ assert.equal(await accessWelcome(page, backend, true), false);
+ const openStaleWelcome = async () => {
+  await page.evaluate(path => localStorage.setItem('siglum_current_file', path), welcomePath);
+  await page.reload();
+  await page.getByText('Could not reopen "welcome.tex".', { exact: false }).waitFor();
+  assert.equal(await page.evaluate(() => localStorage.getItem('siglum_current_file')), welcomePath);
+  assert.equal(await page.getByRole('button', { name: 'Open the editor', exact: true }).count(), 0);
+  assert.equal(await accessWelcome(page, backend), false);
+ };
+ const waitForDraft = async () => {
+  await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('siglum_current_file')), draftPath);
+ };
+ await openStaleWelcome();
+ await page.locator('summary').filter({ hasText: 'Choose another file' }).click();
+ await page.getByRole('button', { name: 'untitled.tex', exact: true }).click();
+ await waitForDraft();
+ assert.equal(await accessWelcome(page, backend), false);
+ console.log('PASS', kind, 'stale welcome can recover to an existing saved draft');
+
+ await openStaleWelcome();
+ await page.getByRole('button', { name: 'New document', exact: true }).click();
+ await page.locator('.cm-content').waitFor();
+ const newPath = await page.evaluate(() => localStorage.getItem('siglum_current_file'));
+ assert.match(newPath, /^\/project\/src\/.+\.tex$/);
+ assert.notEqual(newPath, welcomePath);
+ assert.notEqual(newPath, draftPath);
+ assert.equal(await accessWelcome(page, backend), false);
+ const original = new URL(target);
+ original.searchParams.set('file', draftPath);
+ await page.goto(original.href);
+ await waitForDraft();
+ assert.deepEqual(errors, []);
+ console.log('PASS', kind, 'new document recovery preserves the existing draft and does not replace welcome');
  }finally{await browser.close()}
 }

@@ -27,6 +27,8 @@ interface UseFileManagerReturn {
   fileTree: FileNode | null
   isLoading: boolean
   error: string | null
+  failedRestorePath: string | null
+  createRecoveryDocument: () => Promise<void>
   openFile: (path: string) => Promise<void>
   saveFile: (path: string, content: string) => Promise<void>
   updateContent: (content: string) => Promise<void>
@@ -44,6 +46,7 @@ export function useFileManager(): UseFileManagerReturn {
   const [fileTree, setFileTree] = useState<FileNode | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [failedRestorePath, setFailedRestorePath] = useState<string | null>(null)
 
   // Initialize and subscribe to changes
   useEffect(() => {
@@ -62,7 +65,9 @@ export function useFileManager(): UseFileManagerReturn {
 
         // Subscribe to file changes
         fileUnsubscribe = fileManager.subscribe((file) => {
-          if (!cancelled) setCurrentFile(file)
+          if (cancelled) return
+          setCurrentFile(file)
+          if (file) setFailedRestorePath(null)
         })
 
         // Subscribe to file tree changes
@@ -103,7 +108,8 @@ export function useFileManager(): UseFileManagerReturn {
           } catch (err) {
             console.warn('[useFileManager] Failed to restore:', lastPath, err)
             if (cancelled) return
-            // Preserve the pointer instead of silently opening a welcome/unrelated file.
+            // Let the user choose a recovery action before changing the saved selection.
+            setFailedRestorePath(lastPath)
             throw new Error(`Could not reopen "${lastPath.split('/').pop()}". Reload to retry. Your saved document selection has been kept.`)
           }
         }
@@ -241,6 +247,30 @@ export function useFileManager(): UseFileManagerReturn {
     }
   }, [])
 
+  const createRecoveryDocument = useCallback(async () => {
+    setIsLoading(true)
+    try {
+      // A read failure does not prove the saved file is absent. Use a fresh
+      // path without probing or writing the unreadable file.
+      const suffix = Array.from(crypto.getRandomValues(new Uint8Array(8)), byte =>
+        byte.toString(16).padStart(2, '0')
+      ).join('')
+      await fileManager.createFile(
+        `/project/src/untitled-${suffix}.tex`,
+        String.raw`\documentclass{article}
+\begin{document}
+
+\end{document}
+`
+      )
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to create a recovery document')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [])
+
   // Get recent paths
   const getRecentPaths = useCallback(() => {
     return fileManager.getRecentPaths()
@@ -251,6 +281,8 @@ export function useFileManager(): UseFileManagerReturn {
     fileTree,
     isLoading,
     error,
+    failedRestorePath,
+    createRecoveryDocument,
     openFile,
     saveFile,
     updateContent,

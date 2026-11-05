@@ -3,6 +3,7 @@ import { fileManager } from '../services/FileManager'
 import EventBus from '../services/EventBus'
 
 interface UseKeyboardShortcutsOptions {
+  enabled: boolean
   showCommandPalette: boolean
   showDesktopPreview: boolean
   showDocumentation: boolean
@@ -19,6 +20,7 @@ interface UseKeyboardShortcutsOptions {
 }
 
 export function useKeyboardShortcuts({
+  enabled,
   showCommandPalette,
   showDesktopPreview,
   showDocumentation,
@@ -35,6 +37,7 @@ export function useKeyboardShortcuts({
 }: UseKeyboardShortcutsOptions): void {
   // Use refs for state/callbacks to keep the keydown listener stable (never re-added)
   const refs = useRef({
+    enabled,
     showCommandPalette,
     showDesktopPreview,
     showDocumentation,
@@ -50,6 +53,7 @@ export function useKeyboardShortcuts({
     onSelectTabByIndex,
   })
   refs.current = {
+    enabled,
     showCommandPalette,
     showDesktopPreview,
     showDocumentation,
@@ -69,6 +73,7 @@ export function useKeyboardShortcuts({
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.defaultPrevented || e.isComposing) return
       const r = refs.current
+      if (!r.enabled) return
       const key = e.key.toLowerCase()
       const mod = e.metaKey || e.ctrlKey
 
