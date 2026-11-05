@@ -56,7 +56,10 @@ if (import.meta.env.DEV) {
 
 const App: React.FC = () => {
   const isMobile = useIsMobile()
-  const { currentFile, fileTree, isLoading, error, openFile, createNewFile, getRecentPaths } = useFileManager()
+  const {
+    currentFile, fileTree, isLoading, error, failedRestorePath,
+    openFile, createNewFile, createRecoveryDocument, getRecentPaths,
+  } = useFileManager()
   const [editorDraft, setEditorDraft] = useState({ path: '', content: '' })
   // Keep document identity and source coherent in the first render after a tab switch.
   const latexCode = editorDraft.path === currentFile?.path ? editorDraft.content : currentFile?.content ?? ''
@@ -215,6 +218,7 @@ const App: React.FC = () => {
 
   // Keyboard shortcuts hook
   useKeyboardShortcuts({
+    enabled: !error,
     showCommandPalette,
     showDesktopPreview,
     showDocumentation,
@@ -532,15 +536,39 @@ const App: React.FC = () => {
   }
 
   if (error) {
+    const recoveryFiles = failedRestorePath
+      ? fileSystemWatcher.getFilesByExtension('tex').filter(file => file.path !== failedRestorePath)
+      : []
     return (
       <div className="app">
         <div className="main-content app-fullscreen-state">
           <div className="app-error-content">
             <div className="app-error-icon"><TriangleAlert size={32} aria-hidden="true" /></div>
             <div className="app-error-message">Error: {error}</div>
-            <button className="app-error-reload" onClick={() => window.location.reload()}>
-              Reload
-            </button>
+            <div className="app-error-actions">
+              <button type="button" className="app-error-reload" onClick={() => window.location.reload()}>
+                Reload
+              </button>
+              {failedRestorePath && (
+                <button type="button" className="app-error-reload" onClick={createRecoveryDocument}>
+                  New document
+                </button>
+              )}
+            </div>
+            {recoveryFiles.length > 0 && (
+              <details className="app-error-files">
+                <summary>Choose another file</summary>
+                <ul>
+                  {recoveryFiles.map(file => (
+                    <li key={file.path}>
+                      <button type="button" className="app-error-reload" title={file.path} onClick={() => openFile(file.path)}>
+                        {file.name}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
           </div>
         </div>
       </div>
