@@ -27,7 +27,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: SiglumProject/siglum
-          ref: a09470c50d9bf1ba11eea45d35d80b44f38b27dd
+          ref: 7c81c4b42bfff3ccedce03a038c0a1d2f35584ee
           path: siglum-engine
           persist-credentials: false
 
@@ -35,7 +35,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: SiglumProject/siglum-filesystem
-          ref: 11eb3f0b212a79d7b721b8d9ed70fc245648c7f1
+          ref: 00bdc989d8a3346368d273487cbd553fdef71ddc
           path: siglum-filesystem
           persist-credentials: false
 
