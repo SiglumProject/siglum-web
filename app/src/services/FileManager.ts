@@ -152,8 +152,13 @@ class FileManagerService {
       return this.openFiles.get(normalizedPath)!
     }
 
-    // Read file from filesystem
-    const content = await fileSystem.readFile(normalizedPath)
+    let content: string
+    try {
+      content = await fileSystem.readFile(normalizedPath)
+    } catch (error) {
+      await this.removeMissingRecentFile(normalizedPath)
+      throw error
+    }
 
     const file: OpenFile = {
       path: normalizedPath,
@@ -534,6 +539,25 @@ class FileManagerService {
     try {
       localStorage.setItem(RECENT_FILES_KEY, JSON.stringify(this.recentPaths))
     } catch { /* ignore */ }
+    EventBus.emit('recentFilesChanged')
+  }
+
+  private async removeMissingRecentFile(path: string): Promise<void> {
+    if (!this.recentPaths.includes(path)) return
+
+    const separator = path.lastIndexOf('/')
+    const directory = path.slice(0, separator)
+    const name = path.slice(separator + 1)
+    try {
+      // Some storage backends report ENOENT on a temporary read error.
+      // Remove the tab only when a successful listing confirms absence.
+      const entries = await fileSystem.readdir(directory)
+      if (this.currentPath !== path && !this.openFiles.has(path) && !entries.some(entry => entry.name === name)) {
+        this.closeFile(path)
+      }
+    } catch {
+      // Keep the history entry if the parent directory is also unavailable.
+    }
   }
 
   private saveCurrentFile(): void {

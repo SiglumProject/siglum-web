@@ -10,6 +10,16 @@ SESSION-RESTORE-KEEPS-MY-DRAFT
 const welcomePath = '/project/src/welcome.tex';
 const draftPath = '/project/src/untitled.tex';
 
+const savedRecents = page => page.evaluate(() =>
+ JSON.parse(localStorage.getItem('siglum_recent_files') ?? '[]')
+);
+
+const rememberWelcome = (page, select = false) => page.evaluate(({ path, select }) => {
+ const recent = JSON.parse(localStorage.getItem('siglum_recent_files') ?? '[]');
+ localStorage.setItem('siglum_recent_files', JSON.stringify([path, ...recent.filter(file => file !== path)]));
+ if (select) localStorage.setItem('siglum_current_file', path);
+}, { path: welcomePath, select });
+
 // Remove only the sample in this test profile to model a stale saved selection.
 const accessWelcome = (page, backend, remove = false) => page.evaluate(async ({ backend, remove }) => {
  if (backend === 'opfs') {
@@ -53,6 +63,15 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
   if (getDirectory) navigator.storage.getDirectory = (...args) => sessionStorage.getItem('test-root-failure') === '1'
     ? Promise.reject(new DOMException('Temporary test storage failure','UnknownError')) : getDirectory(...args);
   if(forceFallback && !localStorage.getItem('siglum-filesystem-backend'))sessionStorage.setItem('test-storage-failure','1');
+  if(typeof FileSystemFileHandle!=='undefined' && FileSystemFileHandle.prototype.getFile){
+   const original=FileSystemFileHandle.prototype.getFile;
+   FileSystemFileHandle.prototype.getFile=function(...args){
+    if(this.name==='welcome.tex' && sessionStorage.getItem('test-welcome-read-failure')==='1'){
+     return Promise.reject(new DOMException('Temporary welcome read failure','UnknownError'));
+    }
+    return original.apply(this,args);
+   };
+  }
   if(typeof FileSystemFileHandle!=='undefined' && FileSystemFileHandle.prototype.createWritable){
    const original=FileSystemFileHandle.prototype.createWritable;
    FileSystemFileHandle.prototype.createWritable=function(...args){
@@ -92,20 +111,45 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
   await page.getByRole('button',{name:'Reload',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
   console.log('PASS',kind,'legacy inaccessible storage recovers without pinning an empty fallback');
  }
+ const welcomeTab = page.locator('.tab-bar-tab[title="' + welcomePath + '"]');
+ const draftTab = page.locator('.tab-bar-tab[title="' + draftPath + '"]');
+ const openFailure = page.locator('.toast-message').filter({ hasText: 'Could not open "welcome.tex".' });
+ const original = new URL(target);
+ original.searchParams.set('file', draftPath);
+ const waitForDraft = async () => {
+  await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
+  assert.equal(await page.evaluate(() => localStorage.getItem('siglum_current_file')), draftPath);
+ };
+
+ if (backend === 'opfs') {
+  // The storage entry still exists. A failed read must leave the tab and the
+  // active draft intact so that retrying can open it once storage recovers.
+  await page.evaluate(() => sessionStorage.setItem('test-welcome-read-failure', '1'));
+  await page.reload();
+  await waitForDraft();
+  await welcomeTab.click();
+  await openFailure.waitFor();
+  await waitForDraft();
+  assert.ok((await savedRecents(page)).includes(welcomePath));
+  assert.equal(await accessWelcome(page, backend), true);
+  await page.evaluate(() => sessionStorage.removeItem('test-welcome-read-failure'));
+  await welcomeTab.click();
+  await page.waitForFunction(path => localStorage.getItem('siglum_current_file') === path, welcomePath);
+  await draftTab.click();
+  await waitForDraft();
+  console.log('PASS', kind, 'temporarily unreadable welcome keeps its tab and can be reopened');
+ }
+
  // The saved welcome selection is stale. Startup must preserve it and offer
  // recovery without writing a replacement welcome or touching the saved draft.
  assert.equal(await accessWelcome(page, backend, true), false);
  const openStaleWelcome = async () => {
-  await page.evaluate(path => localStorage.setItem('siglum_current_file', path), welcomePath);
+  await rememberWelcome(page, true);
   await page.reload();
   await page.getByText('Could not reopen "welcome.tex".', { exact: false }).waitFor();
   assert.equal(await page.evaluate(() => localStorage.getItem('siglum_current_file')), welcomePath);
   assert.equal(await page.getByRole('button', { name: 'Open the editor', exact: true }).count(), 0);
   assert.equal(await accessWelcome(page, backend), false);
- };
- const waitForDraft = async () => {
-  await page.waitForFunction(() => document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
-  assert.equal(await page.evaluate(() => localStorage.getItem('siglum_current_file')), draftPath);
  };
  await openStaleWelcome();
  await page.locator('summary').filter({ hasText: 'Choose another file' }).click();
@@ -122,11 +166,22 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
  assert.notEqual(newPath, welcomePath);
  assert.notEqual(newPath, draftPath);
  assert.equal(await accessWelcome(page, backend), false);
- const original = new URL(target);
- original.searchParams.set('file', draftPath);
+ await draftTab.waitFor();
+ await welcomeTab.waitFor({ state: 'detached' });
+ assert.ok(!(await savedRecents(page)).includes(welcomePath));
+ console.log('PASS', kind, 'new document recovery removes the stale welcome tab and preserves the saved draft');
+
+ // Simulate an older session with an invalid recent tab and a valid selection.
+ await rememberWelcome(page);
  await page.goto(original.href);
  await waitForDraft();
+ await welcomeTab.click();
+ await openFailure.waitFor();
+ await waitForDraft();
+ await welcomeTab.waitFor({ state: 'detached' });
+ assert.ok(!(await savedRecents(page)).includes(welcomePath));
+ assert.equal(await accessWelcome(page, backend), false);
  assert.deepEqual(errors, []);
- console.log('PASS', kind, 'new document recovery preserves the existing draft and does not replace welcome');
+ console.log('PASS', kind, 'clicking a stale tab preserves the editor and removes only the invalid tab');
  }finally{await browser.close()}
 }

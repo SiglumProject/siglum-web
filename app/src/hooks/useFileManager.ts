@@ -18,9 +18,10 @@
  * ```
  */
 
-import { useState, useEffect, useCallback, startTransition } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { fileManager, type OpenFile } from '../services/FileManager'
 import { fileSystemWatcher, type FileNode } from '../services/FileSystemWatcher'
+import EventBus from '../services/EventBus'
 
 interface UseFileManagerReturn {
   currentFile: OpenFile | null
@@ -29,7 +30,7 @@ interface UseFileManagerReturn {
   error: string | null
   failedRestorePath: string | null
   createRecoveryDocument: () => Promise<void>
-  openFile: (path: string) => Promise<void>
+  openFile: (path: string) => Promise<boolean>
   saveFile: (path: string, content: string) => Promise<void>
   updateContent: (content: string) => Promise<void>
   createFile: (path: string, content?: string) => Promise<void>
@@ -140,20 +141,26 @@ export function useFileManager(): UseFileManagerReturn {
     }
   }, [])
 
-  // Open file
   const openFile = useCallback(async (path: string) => {
+    const needsEditor = !fileManager.getCurrentFile()
+    setError(null)
+    if (needsEditor) setIsLoading(true)
+
     try {
-      setError(null)
-      startTransition(() => {
-        setIsLoading(true)
-      })
       await fileManager.openFile(path)
+      return true
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to open file')
+      const name = path.split('/').pop() || path
+      const message = `Could not open "${name}".`
+      console.warn('[useFileManager] Failed to open:', path, err)
+      if (fileManager.getCurrentFile()) {
+        EventBus.emit('showToast', { message, type: 'error' })
+      } else {
+        setError(message)
+      }
+      return false
     } finally {
-      startTransition(() => {
-        setIsLoading(false)
-      })
+      if (needsEditor) setIsLoading(false)
     }
   }, [])
 
