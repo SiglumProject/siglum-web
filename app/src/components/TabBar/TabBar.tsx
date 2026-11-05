@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { X, FileText } from 'lucide-react'
 import { fileManager } from '../../services/FileManager'
+import EventBus from '../../services/EventBus'
 import './TabBar.css'
 
 interface TabBarProps {
@@ -16,22 +17,26 @@ export const TabBar: React.FC<TabBarProps> = ({ currentPath, onTabSelect, onTabC
   const stableOrderRef = useRef<string[]>([])
 
   useEffect(() => {
-    const recents = fileManager.getRecentPaths()
-      .filter(p => p.endsWith('.tex'))
-      .slice(0, 8)
+    const syncTabs = () => {
+      const recents = fileManager.getRecentPaths()
+        .filter(p => p.endsWith('.tex'))
+        .slice(0, 8)
 
-    // Merge into stable order: keep existing tabs in place, append new ones at the end
-    const prev = stableOrderRef.current
-    const recentSet = new Set(recents)
-    const kept = prev.filter(p => recentSet.has(p))
-    const keptSet = new Set(kept)
-    const added = recents.filter(p => !keptSet.has(p))
-    const next = [...kept, ...added]
+      // Merge into stable order: keep existing tabs in place, append new ones at the end
+      const prev = stableOrderRef.current
+      const recentSet = new Set(recents)
+      const kept = prev.filter(p => recentSet.has(p))
+      const keptSet = new Set(kept)
+      const added = recents.filter(p => !keptSet.has(p))
+      const next = [...kept, ...added]
 
-    stableOrderRef.current = next
-    setTabs(next)
-    onTabsChanged?.(next)
-  }, [currentPath, onTabsChanged])
+      stableOrderRef.current = next
+      setTabs(next)
+      onTabsChanged?.(next)
+    }
+    syncTabs()
+    return EventBus.on('recentFilesChanged', syncTabs)
+  }, [onTabsChanged])
 
   if (tabs.length < 2) return null
 

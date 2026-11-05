@@ -31,6 +31,7 @@ export interface EventMap {
   // Document events
   documentChanged: { id: string; content: string }
   documentSwitched: { id: string }
+  recentFilesChanged: void
   openDocument: { path: string; line?: number }
 
   // Project events

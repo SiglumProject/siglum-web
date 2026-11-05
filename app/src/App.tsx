@@ -378,7 +378,7 @@ const App: React.FC = () => {
 
     setImageFilePath(null)
     setImageError(null)
-    await openFile(filePath)
+    if (!await openFile(filePath)) return
 
     if (autoCompileRef.current) {
       clearPendingAutoCompile()
@@ -387,17 +387,17 @@ const App: React.FC = () => {
   }, [openFile, clearPendingAutoCompile, autoCompileRef, compileRef])
 
   const handleTabClose = useCallback(async (path: string) => {
-    const isActive = path === currentFile?.path
-    // Evict from recents and cache
-    fileManager.closeFile(path)
-    if (isActive) {
-      // Switch to next recent tab
-      const remaining = getRecentPaths()
-      if (remaining.length > 0) {
-        await openFile(remaining[0])
-      } else {
-        await createNewFile()
-      }
+    if (path !== currentFile?.path) {
+      fileManager.closeFile(path)
+      return
+    }
+
+    const nextPath = getRecentPaths().find(recentPath => recentPath !== path)
+    if (nextPath) {
+      if (await openFile(nextPath)) fileManager.closeFile(path)
+    } else {
+      await createNewFile()
+      if (fileManager.getCurrentPath() !== path) fileManager.closeFile(path)
     }
   }, [currentFile?.path, getRecentPaths, openFile, createNewFile])
 
@@ -458,7 +458,7 @@ const App: React.FC = () => {
     }
     setImageFilePath(null)
     setImageError(null)
-    await openFile(filePath)
+    if (!await openFile(filePath)) return
     if (lineNumber) {
       setTimeout(() => {
         EventBus.emit('goToLine', { line: lineNumber })
