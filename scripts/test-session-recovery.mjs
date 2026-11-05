@@ -62,7 +62,11 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
   const getDirectory = navigator.storage.getDirectory?.bind(navigator.storage);
   if (getDirectory) navigator.storage.getDirectory = (...args) => sessionStorage.getItem('test-root-failure') === '1'
     ? Promise.reject(new DOMException('Temporary test storage failure','UnknownError')) : getDirectory(...args);
-  if(forceFallback && !localStorage.getItem('siglum-filesystem-backend'))sessionStorage.setItem('test-storage-failure','1');
+  // Recovery checks later restore writable OPFS after the initial fallback.
+  if(forceFallback && !localStorage.getItem('siglum-filesystem-backend') && !sessionStorage.getItem('test-initial-fallback')){
+   sessionStorage.setItem('test-initial-fallback','1');
+   sessionStorage.setItem('test-storage-failure','1');
+  }
   if(typeof FileSystemFileHandle!=='undefined' && FileSystemFileHandle.prototype.getFile){
    const original=FileSystemFileHandle.prototype.getFile;
    FileSystemFileHandle.prototype.getFile=function(...args){
@@ -86,7 +90,7 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
  await page.keyboard.press('Control+KeyN');await page.waitForFunction(()=>localStorage.getItem('siglum_current_file')==='/project/src/untitled.tex');await page.locator('.cm-content').fill(source);await page.waitForTimeout(1200);
  await page.evaluate(()=>sessionStorage.removeItem('test-storage-failure'));
  await page.reload();await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
- const backend=await page.evaluate(()=>localStorage.getItem('siglum-filesystem-backend'));assert.ok(backend==='opfs'||backend==='indexeddb');
+ let backend=await page.evaluate(()=>localStorage.getItem('siglum-filesystem-backend'));assert.ok(backend==='opfs'||backend==='indexeddb');
  if(backend==='opfs'){
   for(const legacy of [false,true]){
    await page.evaluate(legacy=>{sessionStorage.setItem('test-storage-failure','1');if(legacy)localStorage.removeItem('siglum-filesystem-backend')},legacy);
@@ -102,6 +106,61 @@ for(const [kind, forceFallback] of [['chromium',false],['chromium',true],['webki
   }
  } else {
   await page.evaluate(()=>sessionStorage.setItem('test-no-opfs-probe','1'));await page.reload();await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));assert.equal(await page.evaluate(()=>window.storageProbeCount),0);console.log('PASS',kind,'IndexedDB session stays on its saved backend');
+  if(forceFallback){
+   const readIndexedDBDocuments=()=>page.evaluate(async()=>{
+    const database=await new Promise((resolve,reject)=>{
+     const request=indexedDB.open('siglum_filesystem');
+     request.onsuccess=()=>resolve(request.result);
+     request.onerror=()=>reject(request.error);
+    });
+    try{
+     return await new Promise((resolve,reject)=>{
+      const transaction=database.transaction('files','readonly');
+      const request=transaction.objectStore('files').getAll();
+      transaction.oncomplete=()=>resolve(Object.fromEntries(request.result.filter(file=>file.path.endsWith('.tex')).map(file=>[file.path,file.content])));
+      transaction.onabort=()=>reject(transaction.error);
+     });
+    }finally{database.close()}
+   });
+   const originals=await readIndexedDBDocuments();
+   assert.equal(originals['/src/untitled.tex'],source);
+   assert.equal(await accessWelcome(page,'indexeddb'),true);
+   const opfsDocuments=await page.evaluate(async()=>{
+    sessionStorage.removeItem('test-no-opfs-probe');
+    sessionStorage.removeItem('test-storage-failure');
+    const root=await navigator.storage.getDirectory();
+    const proofName='.session-recovery-write-proof';
+    try{
+     const proof=await root.getFileHandle(proofName,{create:true});
+     const writer=await proof.createWritable();
+     await writer.write('Writable OPFS recovery check');
+     await writer.close();
+    }finally{await root.removeEntry(proofName)}
+    const files=await root.getDirectoryHandle('siglum-files',{create:true});
+    const src=await files.getDirectoryHandle('src',{create:true});
+    const names=[];
+    for await(const entry of src.values())names.push(entry.name);
+    return names;
+   });
+   assert.deepEqual(opfsDocuments,[],'recovery starts with an empty OPFS source directory');
+   for(const savedPreference of [null,'opfs']){
+    await page.evaluate(preference=>{
+     sessionStorage.removeItem('test-no-opfs-probe');
+     sessionStorage.removeItem('test-storage-failure');
+     if(preference===null)localStorage.removeItem('siglum-filesystem-backend');
+     else localStorage.setItem('siglum-filesystem-backend',preference);
+    },savedPreference);
+    await page.reload();
+    await page.waitForFunction(()=>document.querySelector('.cm-content')?.textContent.includes('SESSION-RESTORE-KEEPS-MY-DRAFT'));
+    backend=await page.evaluate(()=>localStorage.getItem('siglum-filesystem-backend'));
+    assert.equal(backend,'indexeddb');
+    assert.equal(await page.evaluate(()=>localStorage.getItem('siglum_current_file')),draftPath);
+    assert.ok(await page.evaluate(()=>window.storageProbeCount)>0,'OPFS is writable and was probed');
+    assert.deepEqual(await readIndexedDBDocuments(),originals,'retain every original IndexedDB document');
+    assert.equal(await accessWelcome(page,backend),true);
+    console.log('PASS',kind,savedPreference===null?'legacy IndexedDB documents recover without a backend preference':'IndexedDB documents recover from an incorrect OPFS preference');
+   }
+  }
  }
  if(backend==='opfs'){
   await page.evaluate(()=>{localStorage.removeItem('siglum-filesystem-backend');sessionStorage.setItem('test-root-failure','1')});
