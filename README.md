@@ -6,6 +6,11 @@ GitHub sync and Zotero references are optional.
 
 [Open Siglum](https://siglum.org/) · [Documentation](https://siglum.org/docs/)
 
+The `performance-optimization` branch integrates native pdfTeX/XeTeX checkpoints
+and deferred, indexed SyncTeX navigation. It needs the matching local engine and
+runtime; see the [performance guide](https://github.com/SiglumProject/siglum/blob/performance-optimization/docs/performance.md).
+These changes are not enabled on the live site by this branch.
+
 ## Quick start
 
 ```sh

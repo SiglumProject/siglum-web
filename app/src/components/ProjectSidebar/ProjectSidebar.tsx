@@ -300,6 +300,10 @@ const FileTreeItem: React.FC<FileTreeItemProps> = React.memo(({
   )
 })
 
+const MIN_SIDEBAR_WIDTH = 235
+const MAX_SIDEBAR_WIDTH = 400
+const SIDEBAR_COLLAPSE_WIDTH = 170
+
 const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
   isExpanded,
   onToggle,
@@ -318,7 +322,7 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
     const saved = sessionStorage.getItem('sidebarWidth')
     return saved ? parseInt(saved, 10) : 240
   })
-  const isResizingRef = useRef(false)
+  const resizeStart = useRef<{ x: number; width: number } | null>(null)
   const [draggedId, setDraggedId] = useState<string | null>(null)
   const [isExternalDragOver, setIsExternalDragOver] = useState(false)
   const [editingNewId, setEditingNewId] = useState<string | null>(null)
@@ -648,27 +652,24 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
     await fileSystemWatcher.refresh()
   }
 
-  const handleResizeStart = (e: React.MouseEvent) => {
+  const handleResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!e.isPrimary || e.button !== 0) return
     e.preventDefault()
-    isResizingRef.current = true
-    const startX = e.clientX
-    const startWidth = sidebarWidth
+    resizeStart.current = { x: e.clientX, width: sidebarWidth }
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
 
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!isResizingRef.current) return
-      const delta = e.clientX - startX
-      const newWidth = Math.max(235, Math.min(400, startWidth + delta))
-      setSidebarWidth(newWidth)
+  const handleResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const start = resizeStart.current
+    if (!start || !e.currentTarget.hasPointerCapture(e.pointerId)) return
+    const width = start.width + e.clientX - start.x
+    if (width <= SIDEBAR_COLLAPSE_WIDTH) {
+      resizeStart.current = null
+      setSidebarWidth(start.width)
+      onToggle()
+      return
     }
-
-    const handleMouseUp = () => {
-      isResizingRef.current = false
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+    setSidebarWidth(Math.max(MIN_SIDEBAR_WIDTH, Math.min(MAX_SIDEBAR_WIDTH, width)))
   }
 
   // Save sidebar width when it changes
@@ -684,11 +685,18 @@ const ProjectSidebar: React.FC<ProjectSidebarProps> = React.memo(({
       onDragLeave={handleExternalDragLeave}
       onDrop={handleExternalDrop}
     >
-      {isExpanded && <div className="sidebar-resize-handle" onMouseDown={handleResizeStart} />}
-      {/* Collapsed state - subtle bar with chevron */}
-      <div className="sidebar-collapsed-zone" onClick={onToggle}>
-        <ChevronRight size={14} className="expand-icon" />
-      </div>
+      {isExpanded ? (
+        <div
+          className="sidebar-resize-handle"
+          onPointerDown={handleResizeStart}
+          onPointerMove={handleResizeMove}
+          onLostPointerCapture={() => { resizeStart.current = null }}
+        />
+      ) : (
+        <button type="button" className="sidebar-collapsed-zone" onClick={onToggle} aria-label="Show project files" title="Show project files">
+          <ChevronRight size={14} className="expand-icon" aria-hidden="true" />
+        </button>
+      )}
 
       {/* Expanded state - full sidebar */}
       <div className="sidebar-expanded-content">

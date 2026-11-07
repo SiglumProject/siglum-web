@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef, Suspense, lazy } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import type { ImperativePanelHandle } from 'react-resizable-panels'
-import { TriangleAlert } from 'lucide-react'
+import { ChevronLeft, TriangleAlert } from 'lucide-react'
 import CommandPalette from './components/CommandPalette'
 import LaTeXEditor from './components/LaTeXEditor/LaTeXEditor'
 import EmptyState from './components/EmptyState'
@@ -24,6 +24,8 @@ import { useKeyboardShortcuts } from './hooks/useKeyboardShortcuts'
 import { fileManager } from './services/FileManager'
 import { fileSystemWatcher } from './services/FileSystemWatcher'
 import GitService from './services/GitService'
+import GitConflictModal from './components/GitConflictModal'
+import type { GitConflictResolution } from '@siglum/git'
 import { ToastContainer } from './components/Toast/Toast'
 import { TabBar } from './components/TabBar/TabBar'
 import EventBus from './services/EventBus'
@@ -41,6 +43,7 @@ const TEXT_EXTS = new Set([
   'sh', 'py', 'lua', 'js', 'css', 'html', 'htm', 'tikz', 'pgf',
 ])
 const MAX_PREVIEW_BYTES = 50 * 1024 * 1024 // 50 MB
+const PREVIEW_WIDTH_KEY = 'siglum-desktop-preview-width'
 function getExt(p: string) { return (p.split('.').pop() || '').toLowerCase() }
 function isImagePath(p: string) { return IMAGE_EXTS.has(getExt(p)) }
 function isTextPath(p: string) {
@@ -57,7 +60,7 @@ if (import.meta.env.DEV) {
 const App: React.FC = () => {
   const isMobile = useIsMobile()
   const {
-    currentFile, fileTree, isLoading, error, failedRestorePath,
+    currentFile, fileTree, isLoading, error, failedRestorePath, dismissFailedRestore,
     openFile, createNewFile, createRecoveryDocument, getRecentPaths,
   } = useFileManager()
   const [editorDraft, setEditorDraft] = useState({ path: '', content: '' })
@@ -137,14 +140,40 @@ const App: React.FC = () => {
   const selectedFileId = (imageFilePath || selectedFilePath) ? `fs:${imageFilePath || selectedFilePath}` : undefined
   const [triggerGitConnect, setTriggerGitConnect] = useState(false)
   const [showConflictModal, setShowConflictModal] = useState(false)
+  const [gitBusy, setGitBusy] = useState(false)
+  const reviewedFiles = useRef<ReturnType<typeof GitService.getStatus>['conflictingFiles']>()
   const [showWordCount, setShowWordCount] = useState(false)
   const [showCompileStatus, setShowCompileStatus] = useState(true)
 
   const editorPanelRef = useRef<ImperativePanelHandle>(null)
   const previewPanelRef = useRef<ImperativePanelHandle>(null)
+  const previewDragStart = useRef(0)
+  const previewRestoreWidth = useRef(0)
+  const rememberPreviewWidth = useCallback((width: number) => {
+    previewRestoreWidth.current = width
+    try { localStorage.setItem(PREVIEW_WIDTH_KEY, String(width)) } catch { /* Storage may be restricted. */ }
+  }, [])
+  const setDesktopPreview = useCallback<React.Dispatch<React.SetStateAction<boolean>>>(next => {
+    const panel = previewPanelRef.current
+    if (!panel) return
+    const isVisible = !panel.isCollapsed()
+    const visible = typeof next === 'function' ? next(isVisible) : next
+    if (visible === isVisible) return
+    if (visible) {
+      let width = previewRestoreWidth.current
+      try { width ||= Number(localStorage.getItem(PREVIEW_WIDTH_KEY)) } catch { /* Use the in-memory width. */ }
+      if (width >= 20 && width <= 80) panel.resize(width)
+      else panel.expand()
+    } else {
+      rememberPreviewWidth(panel.getSize())
+      panel.collapse()
+    }
+  }, [rememberPreviewWidth])
 
   // Compilation state from hook
   const {
+    paragraphPatch,
+    onParagraphFailure,
     pdfData,
     syncTexData,
     compileStatus,
@@ -156,7 +185,7 @@ const App: React.FC = () => {
     autoCompileRef,
     clearPendingAutoCompile,
     diagnostics,
-  } = useCompilation(latexCode, isLoaded, currentFile?.path)
+  } = useCompilation(latexCode, isLoaded, currentFile?.path, !isMobile && showDesktopPreview)
 
   // Modal state from hook
   const {
@@ -229,7 +258,7 @@ const App: React.FC = () => {
     onCreateNewDocument: createNewFile,
     onCloseCurrentDocument: handleCloseCurrentDocument,
     onToggleSidebar: handleToggleSidebar,
-    setShowDesktopPreview,
+    setShowDesktopPreview: setDesktopPreview,
     setShowPreview,
     onSelectTabByIndex: selectTabByIndex,
   })
@@ -311,9 +340,12 @@ const App: React.FC = () => {
   selectedFilePathRef.current = selectedFilePath
   useEffect(() => {
     const unsubscribe = GitService.subscribeStatus(async (status) => {
-      // Only show modal for actual conflicts (same files edited locally and remotely)
-      if (status.hasConflict && status.conflictingFiles && status.conflictingFiles.length > 0) {
+      setGitBusy(status.isSyncing)
+      if (!status.isSyncing && status.hasConflict && status.conflictingFiles?.length && reviewedFiles.current !== status.conflictingFiles) {
+        reviewedFiles.current = status.conflictingFiles
         setShowConflictModal(true)
+      } else if (!status.conflictingFiles?.length) {
+        reviewedFiles.current = undefined
       }
 
       // If sync happened and current file might have changed, reload it
@@ -336,30 +368,23 @@ const App: React.FC = () => {
     return unsubscribe
   }, [selectedFilePath])
 
-  const handleUseRemote = useCallback(async () => {
-    try {
-      await GitService.forcePull()
-      if (selectedFilePath && selectedFilePathRef.current === selectedFilePath) {
-        const content = await FileReaderService.readFile(selectedFilePath)
-        if (selectedFilePathRef.current !== selectedFilePath) return
-        if (content !== null) {
-          EventBus.emit('forceEditorSync')
-          setLatexCode(content)
-        }
-      }
-      setShowConflictModal(false)
-    } catch (error) {
+  const loadConflict = useCallback(() => GitService.getConflictReview(), [])
+  const closeConflict = useCallback(() => setShowConflictModal(false), [])
+  const applyConflict = useCallback(async (id: string, choices: GitConflictResolution[]) => {
+    await GitService.applyConflictResolution(id, choices)
+    const current = fileManager.getCurrentFile()
+    await fileManager.refreshOpenGitFiles().catch(error => {
       EventBus.emit('showToast', {
-        type: 'error', duration: 10000,
-        message: error instanceof Error ? error.message : 'Could not download the remote version. Please try again.',
+        type: 'error',
+        message: error instanceof Error ? error.message : 'Could not refresh open files.',
       })
+    })
+    const refreshed = fileManager.getCurrentFile()
+    if (current && refreshed?.path === current.path && refreshed.content !== latexCodeRef.current) {
+      EventBus.emit('forceEditorSync')
+      setLatexCode(refreshed.content)
     }
-  }, [selectedFilePath])
-
-  const handleKeepLocal = useCallback(() => {
-    setShowConflictModal(false)
-    // User will continue editing, conflict resolved on next push
-  }, [])
+  }, [setLatexCode])
 
   const handleFileSelect = useCallback(async (file: FileItem) => {
     const filePath = file.path || `/${file.name}`
@@ -554,6 +579,9 @@ const App: React.FC = () => {
                   New document
                 </button>
               )}
+              {failedRestorePath && <button type="button" className="app-error-reload" onClick={dismissFailedRestore}>
+                Continue without this tab
+              </button>}
             </div>
             {recoveryFiles.length > 0 && (
               <details className="app-error-files">
@@ -621,7 +649,7 @@ const App: React.FC = () => {
         {/* Desktop: Side-by-side panels */}
         {!isMobile && <div className={`desktop-view ${isLoaded ? 'loaded' : ''}`}>
           <PanelGroup direction="horizontal" autoSaveId="editor-preview-panels">
-            <Panel id="editor" order={1} ref={editorPanelRef} defaultSize={showDesktopPreview ? 55 : 100} minSize={20}>
+            <Panel id="editor" order={1} ref={editorPanelRef} defaultSize={55} minSize={20}>
               <div className="editor-with-sidebar">
                 <Suspense fallback={null}>
                   <ProjectSidebar
@@ -670,20 +698,45 @@ const App: React.FC = () => {
               </div>
             </Panel>
             
-            {showDesktopPreview && (
-              <>
-                <PanelResizeHandle className="resize-handle" />
-
-                <Panel id="preview" order={2} ref={previewPanelRef} defaultSize={45} minSize={20}>
-                  <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`}>
-                    <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
-                      <PDFViewer pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} documentId={currentFile?.path} />
-                    </Suspense>
-                  </div>
-                </Panel>
-              </>
-            )}
+            <PanelResizeHandle
+              className="resize-handle"
+              aria-label="Resize PDF preview"
+              onDragging={dragging => {
+                if (dragging) previewDragStart.current = previewPanelRef.current?.getSize() ?? 0
+                else previewDragStart.current = 0
+              }}
+            />
+            <Panel
+              id="preview"
+              order={2}
+              ref={previewPanelRef}
+              defaultSize={45}
+              minSize={20}
+              collapsible
+              onCollapse={() => {
+                if (previewDragStart.current > 0) rememberPreviewWidth(previewDragStart.current)
+                setShowDesktopPreview(false)
+              }}
+              onExpand={() => setShowDesktopPreview(true)}
+            >
+              <div className={`pdf-preview-panel ${isLoaded ? 'loaded' : ''}`} hidden={!showDesktopPreview}>
+                <Suspense fallback={<div className="pdf-loading">Loading preview...</div>}>
+                  <PDFViewer paragraphPatch={paragraphPatch} onParagraphFailure={onParagraphFailure} pdfData={pdfData ?? undefined} syncTexData={syncTexData ?? undefined} onCompile={compile} isCompiling={compileStatus === 'compiling' || compileStatus === 'initializing'} documentId={currentFile?.path} />
+                </Suspense>
+              </div>
+            </Panel>
           </PanelGroup>
+          {!showDesktopPreview && (
+            <button
+              type="button"
+              className="desktop-preview-rail"
+              aria-label="Show PDF preview"
+              title="Show PDF preview"
+              onClick={() => setDesktopPreview(true)}
+            >
+              <ChevronLeft size={14} aria-hidden="true" />
+            </button>
+          )}
         </div>}
 
         {/* Mobile: Single panel view */}
@@ -751,68 +804,15 @@ const App: React.FC = () => {
         </Suspense>
       )}
 
-      {showConflictModal && (() => {
-        const config = GitService.getConfig()
-        const status = GitService.getStatus()
-        const repoPath = config?.repoUrl?.replace(/^https?:\/\/github\.com\//, '').replace(/\.git$/, '')
-        const currentBranch = config?.branch
-        const isSameBranch = status.conflictSource === 'same-branch'
-        const otherBranch = !isSameBranch ? status.conflictSource : undefined
-        const canShowCompare = config?.provider === 'github' && repoPath && otherBranch && currentBranch
-
-        return (
-          <div className="conflict-modal-overlay">
-            <div className="conflict-modal">
-              <h3 className="conflict-modal-title">Conflicting Changes</h3>
-              {repoPath && (
-                <a
-                  href={`https://github.com/${repoPath}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="conflict-modal-repo"
-                >
-                  {repoPath}
-                </a>
-              )}
-              {status.conflictingFiles && (
-                <ul className="conflict-modal-files">
-                  {status.conflictingFiles.map(file => (
-                    <li key={file.path}>
-                      <span className="conflict-file-name">{file.path}</span>
-                      {file.linesChanged !== undefined && (
-                        <span className="conflict-file-lines">
-                          {file.linesChanged} {file.linesChanged === 1 ? 'line' : 'lines'} different
-                        </span>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="conflict-modal-description">
-                This version and the GitHub version are different.
-              </p>
-              {canShowCompare && (
-                <a
-                  href={`https://github.com/${repoPath}/compare/${otherBranch}...${currentBranch}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="conflict-modal-compare-link"
-                >
-                  Compare on GitHub →
-                </a>
-              )}
-              <div className="conflict-modal-actions">
-                <button className="conflict-modal-btn secondary" onClick={handleKeepLocal}>
-                  Keep This Version
-                </button>
-                <button className="conflict-modal-btn primary" onClick={handleUseRemote}>
-                  Use Latest from GitHub
-                </button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+      {showConflictModal && (
+        <GitConflictModal
+          repoUrl={GitService.getConfig()?.repoUrl}
+          loadReview={loadConflict}
+          onApply={applyConflict}
+          onClose={closeConflict}
+          busy={gitBusy}
+        />
+      )}
       <ToastContainer />
     </div>
   )

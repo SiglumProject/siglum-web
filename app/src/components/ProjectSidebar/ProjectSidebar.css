@@ -19,6 +19,7 @@
   bottom: 0;
   width: 8px;
   cursor: ew-resize;
+  touch-action: none;
   z-index: 10;
 }
 
@@ -60,11 +61,6 @@
   display: none;
 }
 
-.project-sidebar.collapsed .sidebar-collapsed-zone {
-  opacity: 1;
-  pointer-events: auto;
-}
-
 /* Expanded state - width is set via inline style for resizing */
 .project-sidebar.expanded {
 }
@@ -72,11 +68,6 @@
 .project-sidebar.expanded .sidebar-expanded-content {
   opacity: 1;
   pointer-events: auto;
-}
-
-.project-sidebar.expanded .sidebar-collapsed-zone {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* Collapsed zone - the hover trigger */
@@ -90,7 +81,8 @@
   display: flex;
   align-items: flex-start;
   justify-content: center;
-  padding-top: 9px;
+  padding: 9px 0 0;
+  border: 0;
   transition: all 0.2s ease;
   z-index: 10;
   background: rgba(26, 22, 20, 0.5);
@@ -1755,6 +1747,11 @@
 }
 
 /* Mobile: sidebar as slide-in overlay */
+.mobile-view .sidebar-resize-handle,
+.mobile-view .sidebar-collapsed-zone {
+  display: none;
+}
+
 @media (max-width: 768px) {
   .project-sidebar {
     position: fixed;

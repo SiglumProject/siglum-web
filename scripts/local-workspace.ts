@@ -1,14 +1,23 @@
 /** Local development across the four repositories. No publish or Git mutations. */
 import { relative, resolve } from 'node:path'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { networkInterfaces } from 'node:os'
 
 const ui = resolve(import.meta.dir, '..')
 const code = resolve(ui, '../..')
+// Keep machine-specific worktree choices out of package manifests and lockfiles.
+const sourceConfig = resolve(ui, '.local-release/source-paths.json')
+const sourcePaths: Record<string, unknown> = existsSync(sourceConfig)
+  ? JSON.parse(readFileSync(sourceConfig, 'utf8')) : {}
+function libraryPath(name: 'filesystem' | 'git' | 'engine') {
+  const value = process.env['SIGLUM_' + name.toUpperCase() + '_SOURCE'] ?? sourcePaths[name]
+  if (value !== undefined && typeof value !== 'string') throw new Error('Invalid source path for ' + name)
+  return value ? resolve(ui, value) : resolve(code, 'siglum-' + name)
+}
 const repos = {
-  filesystem: resolve(code, 'siglum-filesystem'),
-  git: resolve(code, 'siglum-git'),
-  engine: resolve(code, 'siglum-engine'),
+  filesystem: libraryPath('filesystem'),
+  git: libraryPath('git'),
+  engine: libraryPath('engine'),
   ui,
 }
 const bun = process.execPath
@@ -103,8 +112,9 @@ async function start(lan = false) {
   } finally { stop() }
 }
 const command = process.argv[2]
-if (command === 'prepare') await prepare()
+if (command === 'link') await installSourceWorkspace()
+else if (command === 'prepare') await prepare()
 else if (command === 'check') await check()
 else if (command === 'start') await start()
 else if (command === 'start-lan') await start(true)
-else throw new Error('Usage: bun scripts/local-workspace.ts prepare|check|start|start-lan')
+else throw new Error('Usage: bun scripts/local-workspace.ts link|prepare|check|start|start-lan')

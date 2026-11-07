@@ -15,10 +15,14 @@ const PRECACHE_ASSETS = [
 
 // Patterns for assets to cache on first fetch
 const CACHEABLE_PATTERNS = [
+  // Provider URLs contain a digest of every executable and data asset.
+  /^\/tools\/providers\/[a-f0-9]{64}\//,
   // Static assets
-  /\.(js|css|html)$/,
+  /\.(js|mjs|css|html)$/,
   // WASM files
   /\.wasm$/,
+  /^\/assets\/legacy-tkz-2018-[A-Za-z0-9_-]+\.bin$/,
+  /^\/paragraph-runtime\/[^/]+\.(tfm|pfb|tex)$/,
   // Worker scripts
   /worker.*\.js$/,
   // PDF.js
@@ -64,11 +68,15 @@ function shouldCache(url) {
  * Install event - precache core assets
  */
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(PRECACHE_ASSETS))
-      .then(() => self.skipWaiting())  // Activate immediately
-  )
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME)
+    await cache.addAll(PRECACHE_ASSETS.map(url => new Request(url, { cache: 'reload' })))
+    const shell = await cache.match('/index.html')
+    const html = await shell.text()
+    const urls = [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map(match => match[1])
+    await cache.addAll([...new Set(urls)].map(url => new Request(url, { cache: 'reload' })))
+    await self.skipWaiting()
+  })())
 })
 
 /**
@@ -104,38 +112,40 @@ self.addEventListener('fetch', (event) => {
     return
   }
 
-  event.respondWith(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.match(event.request).then(cachedResponse => {
-        // Fetch fresh version in background
-        const fetchPromise = fetch(event.request)
-          .then(networkResponse => {
-            // Only cache successful responses
-            if (networkResponse.ok) {
-              cache.put(event.request, networkResponse.clone())
-            }
-            return networkResponse
-          })
-          .catch(error => {
-            // Network failed - return cached response or throw
-            if (cachedResponse) {
-              return cachedResponse
-            }
-            // No cache and network failed - rethrow to trigger error handling
-            throw error
-          })
+  // Vite's hashed assets can stay cached for the lifetime of this build.
+  const pathname = new URL(url).pathname
+  const immutableAsset = /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\./.test(pathname) || /^\/tools\/providers\/[a-f0-9]{64}\//.test(pathname)
 
-        // Return cached immediately if available (stale-while-revalidate)
-        // Otherwise wait for network (cache-first with network fallback)
-        // HTML and the unversioned engine worker must be fresh when online.
-        // Hashed production assets are immutable and safe to serve from cache.
-        const pathname = new URL(url).pathname
-        const immutableAsset = /\/assets\/[^/]+-[A-Za-z0-9_-]{8,}\./.test(pathname)
-        event.waitUntil(fetchPromise.then(() => undefined, () => undefined))
-        return immutableAsset ? (cachedResponse || fetchPromise) : fetchPromise
-      })
-    })
-  )
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME)
+    // A preload and a module request can carry different Origin headers.
+    // The same-origin hash identifies the asset across those variants.
+    const sameOrigin = new URL(url).origin === self.location.origin
+    const cached = await cache.match(event.request, immutableAsset && sameOrigin ? { ignoreVary: true } : undefined)
+    if (immutableAsset && cached) return cached
+
+    // A browser HTTP cache hit can yield a bare 304 to a service worker.
+    // Fetch a complete response whenever Cache Storage has no immutable asset.
+    try {
+      const response = await fetch(event.request, immutableAsset ? { cache: 'reload' } : undefined)
+      if (response.status === 304 && cached) return cached
+      if (response.ok) {
+        const write = cache.put(event.request, response.clone()).catch(() => {})
+        if (immutableAsset) await write
+        else event.waitUntil(write)
+      }
+      return response
+    } catch (error) {
+      if (cached) return cached
+      // The first visit can register this worker after its navigation already
+      // finished. Restore the app shell for document/query URLs on offline reload.
+      if (sameOrigin && event.request.mode === 'navigate' && (pathname === '/' || pathname === '/index.html')) {
+        const shell = await cache.match('/index.html')
+        if (shell) return shell
+      }
+      throw error
+    }
+  })())
 })
 
 /**
@@ -155,7 +165,7 @@ self.addEventListener('message', (event) => {
     const urls = event.data.urls
     if (Array.isArray(urls)) {
       event.waitUntil(
-        caches.open(CACHE_NAME).then(cache => Promise.all(urls.map(async url => {
+        caches.open(CACHE_NAME).then(cache => Promise.allSettled(urls.map(async url => {
           if (!await cache.match(url)) await cache.add(new Request(url, { cache: 'reload' }))
         })))
       )

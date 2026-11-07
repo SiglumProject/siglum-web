@@ -11,10 +11,12 @@
   "homepage": "https://siglum.org",
   "scripts": {
     "dev": "vite",
-    "build": "tsc -b && vite build",
+    "build": "bun scripts/prepareBrowserTools.ts && tsc -b && vite build",
     "preview": "vite preview",
-    "test": "bun test tests",
-    "build:local": "tsc -b && vite build --mode local-preview"
+    "test": "bun scripts/test-isolated.ts",
+    "build:local": "bun scripts/prepareBrowserTools.ts && tsc -b && vite build --mode local-preview",
+    "preview:experimental": "node scripts/preview-experimental.mjs",
+    "prepare:paragraph": "bun scripts/prepareParagraphRuntime.ts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.0",

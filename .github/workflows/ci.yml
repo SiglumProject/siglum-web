@@ -3,10 +3,13 @@ name: Web CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, performance-optimization]
 
 permissions:
   contents: read
+
+env:
+  PERFORMANCE_SOURCES: ${{ (github.ref_name == 'performance-optimization' || github.head_ref == 'performance-optimization') && 'true' || 'false' }}
 
 jobs:
   check:
@@ -26,7 +29,47 @@ jobs:
         with:
           bun-version: '1.3.4'
 
+      - name: Check out performance engine
+        if: env.PERFORMANCE_SOURCES == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum
+          ref: performance-optimization
+          path: .local-release/sources/engine
+          persist-credentials: false
+
+      - name: Check out performance filesystem
+        if: env.PERFORMANCE_SOURCES == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum-filesystem
+          ref: performance-optimization
+          path: .local-release/sources/filesystem
+          persist-credentials: false
+
+      - name: Check out performance git
+        if: env.PERFORMANCE_SOURCES == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: SiglumProject/siglum-git
+          ref: performance-optimization
+          path: .local-release/sources/git
+          persist-credentials: false
+
+      - name: Install matching source libraries
+        if: env.PERFORMANCE_SOURCES == 'true'
+        env:
+          SIGLUM_ENGINE_SOURCE: ${{ github.workspace }}/.local-release/sources/engine
+          SIGLUM_FILESYSTEM_SOURCE: ${{ github.workspace }}/.local-release/sources/filesystem
+          SIGLUM_GIT_SOURCE: ${{ github.workspace }}/.local-release/sources/git
+        run: |
+          bun run link:local
+          bun run --cwd .local-release/sources/filesystem build
+          bun run --cwd .local-release/sources/git build
+          bun run --cwd .local-release/sources/engine build:types
+
       - name: Install frozen published dependencies
+        if: env.PERFORMANCE_SOURCES != 'true'
         run: bun install --frozen-lockfile --ignore-scripts
 
       - name: Check app and package Worker

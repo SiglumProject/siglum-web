@@ -30,7 +30,8 @@
     "test:selection-menu": "node scripts/test-selection-menu.mjs",
     "test:keyboard-shortcuts": "node scripts/test-keyboard-shortcuts.mjs",
     "test:session-recovery": "node scripts/test-session-recovery.mjs",
-    "test:setup": "bun test scripts/tests"
+    "test:setup": "bun test scripts/tests",
+    "link:local": "bun scripts/local-workspace.ts link"
   },
   "devDependencies": {
     "typescript": "~5.6.0",

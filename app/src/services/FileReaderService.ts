@@ -12,6 +12,23 @@ class FileReaderService {
     try { return await fileSystem.readBinary(path) } catch { return null }
   }
 
+  async listFiles(path: string): Promise<string[]> {
+    return (await fileSystem.readdir(path)).filter(entry => !entry.isDirectory).map(entry => entry.name)
+  }
+
+  async fileSize(path: string): Promise<number | null> {
+    const stats = await fileSystem.stat(path)
+    return stats.isFile ? stats.size : null
+  }
+
+  async readRawBinary(path: string): Promise<Uint8Array> {
+    return fileSystem.readBinary(path, { autoDecompress: false })
+  }
+
+  async readBinaryBatch(paths: string[]): Promise<Map<string, Uint8Array>> {
+    return fileSystem.readBinaryBatch(paths, { autoDecompress: true })
+  }
+
   /**
    * Read a file from its mounted project path.
    */

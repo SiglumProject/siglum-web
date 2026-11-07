@@ -1,3 +1,5 @@
+import ParagraphOverlay from './ParagraphOverlay'
+import type { ParagraphPatch } from '../services/ParagraphPreview'
 /**
  * PDFViewer - Full-featured PDF viewer using pdf.js
  *
@@ -13,7 +15,7 @@
  *   - Page cache with cleanup for off-screen pages
  */
 
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react'
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react'
 import { ChevronLeft, ChevronRight, ChevronUp, ChevronDown, X, Download } from 'lucide-react'
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs'
 import type { TextItem, TextContent } from 'pdfjs-dist/types/src/display/api'
@@ -26,11 +28,8 @@ import PdfThemeToggle from './PdfThemeToggle'
 import PdfPageControl from './PdfPageControl'
 import { readPdfText } from '../utils/pdfText'
 
-// Set worker path
-pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/legacy/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString()
+import { scheduleForegroundPdfRender } from '../services/foregroundPdfRender'
+import { getPdfWorker } from '../services/PdfWorker'
 
 // How many pages to keep in cache around current page
 const PAGE_CACHE_SIZE = 3
@@ -63,6 +62,8 @@ function evictOldestProxy() {
 }
 
 interface PDFViewerProps {
+  paragraphPatch?: ParagraphPatch | null
+  onParagraphFailure?: (patch: ParagraphPatch) => void
   compact?: boolean
   pdfUrl?: string
   pdfData?: Uint8Array
@@ -93,10 +94,14 @@ const ZOOM_PRESETS = [
   { label: '200%', value: 2.0 },
 ]
 
-const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCompile, isCompiling, documentId, compact = false }) => {
+const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, syncTexData, onCompile, isCompiling, documentId, compact = false, paragraphPatch, onParagraphFailure }) => {
   const { dark } = usePdfTheme()
   const [pdf, setPdf] = useState<pdfjsLib.PDFDocumentProxy | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
+  const activePatch = paragraphPatch?.basePdf === pdfData ? paragraphPatch : null
+  useEffect(() => {
+    if (activePatch) setCurrentPage(activePatch.page)
+  }, [activePatch])
   const [pageCount, setPageCount] = useState(0)
   // renderScale: the scale at which we render the canvas (for sharpness)
   const [renderScale, setRenderScale] = useState(1)
@@ -132,7 +137,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
   const [syncHighlight, setSyncHighlight] = useState<{ y: number; key: number } | null>(null)
   const revealLocationRef = useRef<(x: number, y: number) => void>(() => {})
   const pendingJumpRef = useRef<{ page: number; show: () => void } | null>(null)
-  const renderedPageRef = useRef<{ page: number; scale: number; pdf: pdfjsLib.PDFDocumentProxy } | null>(null)
+  const renderedPageRef = useRef<{ id: number; page: number; scale: number; pdf: pdfjsLib.PDFDocumentProxy } | null>(null)
   useEffect(() => { pendingJumpRef.current = null }, [documentId])
   const syncHighlightTimeoutRef = useRef<number | null>(null)
   const syncHighlightKeyRef = useRef(0)
@@ -152,7 +157,12 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
   const highlightLayerRef = useRef<HTMLDivElement>(null)
   const zoomButtonRef = useRef<HTMLButtonElement>(null)
   const pdfDataCopyRef = useRef<Uint8Array | null>(null) // Keep a copy for download (pdf.js may detach the buffer)
+  const pdfSyncTexRef = useRef<string>()
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null) // Track current PDF for cleanup
+  const pdfRequest = useMemo(() => ({ input: pdfData || pdfUrl, documentId }), [pdfData, pdfUrl, documentId])
+  const requestedPdfRef = useRef(pdfRequest)
+  useLayoutEffect(() => { requestedPdfRef.current = pdfRequest }, [pdfRequest])
+  const displayedPdfRequestRef = useRef<typeof pdfRequest | null>(null)
   const loadingTaskRef = useRef<pdfjsLib.PDFDocumentLoadingTask | null>(null) // Track loading task for cancellation
   const pageCacheRef = useRef<Map<number, pdfjsLib.PDFPageProxy>>(new Map()) // LRU page cache
   const searchAbortRef = useRef<AbortController | null>(null) // For cancelling ongoing search
@@ -161,8 +171,11 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
   const pixelRatioRef = useRef(window.devicePixelRatio || 1) // Cache pixel ratio (rarely changes)
   const stateRestoredRef = useRef(false) // Track if state has been restored for this document
   const saveStateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null) // Debounce state saves
-  const pageTextsRef = useRef<Map<number, string>>(new Map()) // Cached extracted text per PDF page
-  const pageTextContentRef = useRef<Map<number, TextContent>>(new Map()) // Cached TextContent per page (for inverse sync)
+  const [scrollSyncEnabled, setScrollSyncEnabled] = useState(false)
+  const scrollSyncModeRef = useRef<boolean | null>(null)
+  const scrollTextsRef = useRef<{ request: typeof pdfRequest; pdf: pdfjsLib.PDFDocumentProxy; pages: Map<number, string> } | null>(null)
+  const pendingScrollRef = useRef<{ request: typeof pdfRequest; words: string[] } | null>(null)
+  const visibleTextRef = useRef<{ renderId: number; content: TextContent } | null>(null)
   const documentIdRef = useRef(documentId) // Ref for stable callback
   documentIdRef.current = documentId
 
@@ -183,8 +196,12 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
       const elementUnderCursor = document.elementFromPoint(e.clientX, e.clientY)
       if (!elementUnderCursor || !textLayer.contains(elementUnderCursor)) return
 
-      const textContent = pageTextContentRef.current.get(currentPageRef.current)
-      if (!textContent) return
+      const visibleText = visibleTextRef.current
+      const painted = renderedPageRef.current
+      if (!visibleText || !painted || painted.id !== visibleText.renderId
+        || painted.pdf !== pdfRef.current || painted.page !== currentPageRef.current
+        || displayedPdfRequestRef.current !== requestedPdfRef.current) return
+      const textContent = visibleText.content
 
       // Check if user selected text or just clicked
       const selection = window.getSelection()
@@ -537,37 +554,58 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
     return EventBus.on('forwardSync', handleForwardSync)
   }, []) // Stable — uses refs and service singleton for changing values
 
+  useEffect(() => EventBus.on('syncModeChanged', ({ enabled }) => {
+    scrollSyncModeRef.current = enabled
+    if (!enabled) pendingScrollRef.current = null
+    setScrollSyncEnabled(enabled)
+  }), [])
+
+  const revealScrollMatch = useCallback((words: string[], pages: Map<number, string>) => {
+    let bestPage = -1
+    let bestScore = 0
+    const currentP = currentPageRef.current
+
+    for (const [page, pageText] of pages) {
+      const score = words.filter(w => pageText.includes(w)).length
+      // Tiebreak: prefer page closer to current (avoids jumps on ambiguous matches)
+      if (score > bestScore || (score === bestScore && bestPage !== -1 && Math.abs(page - currentP) < Math.abs(bestPage - currentP))) {
+        bestScore = score
+        bestPage = page
+      }
+    }
+
+    if (bestScore >= 2 && bestPage !== currentP && syncTexService.acquireScrollLock('editor')) {
+      setCurrentPage(bestPage)
+    }
+  }, [])
+
   // Scroll sync: Listen for editor text → find matching PDF page
   useEffect(() => {
     return EventBus.on('scrollSync', ({ text, source }) => {
-      if (source !== 'editor') return
-      if (pageTextsRef.current.size === 0) return
+      if (source !== 'editor' || scrollSyncModeRef.current === false) return
+      const request = requestedPdfRef.current
+      if (!request.input) return
 
       // Extract distinctive words from the editor text
       const words = text.toLowerCase().split(/\s+/).filter(w => w.length >= 4 && /[a-z]/.test(w))
-      if (words.length < 2) return
-
-      // Search all pages, pick the one with the most matching words
-      let bestPage = -1
-      let bestScore = 0
-      const currentP = currentPageRef.current
-
-      for (const [page, pageText] of pageTextsRef.current) {
-        const lower = pageText.toLowerCase()
-        const score = words.filter(w => lower.includes(w)).length
-        // Tiebreak: prefer page closer to current (avoids jumps on ambiguous matches)
-        if (score > bestScore || (score === bestScore && bestPage !== -1 && Math.abs(page - currentP) < Math.abs(bestPage - currentP))) {
-          bestScore = score
-          bestPage = page
-        }
+      if (words.length < 2) {
+        pendingScrollRef.current = null
+        return
       }
 
-      if (bestScore >= 2 && bestPage !== currentP) {
-        if (!syncTexService.acquireScrollLock('editor')) return
-        setCurrentPage(bestPage)
+      const index = scrollTextsRef.current
+      if (index?.request === request && displayedPdfRequestRef.current === request && index.pdf === pdfRef.current) {
+        revealScrollMatch(words, index.pages)
+        return
+      }
+      pendingScrollRef.current = { request, words }
+      // An editor that remained enabled can outlive a hidden preview panel.
+      if (scrollSyncModeRef.current === null) {
+        scrollSyncModeRef.current = true
+        setScrollSyncEnabled(true)
       }
     })
-  }, [])
+  }, [revealScrollMatch])
 
   // Cleanup PDF on unmount
   useEffect(() => {
@@ -622,6 +660,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
       }
       // Clear current proxy ref (don't destroy — it's in the cache)
       pageCacheRef.current.clear()
+      visibleTextRef.current = null
+      displayedPdfRequestRef.current = null
       pdfRef.current = null
       setPdf(null)
       setIsLoading(false)
@@ -641,6 +681,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         }
         if (pdfData) pdfDataCopyRef.current = pdfData
         pageCacheRef.current.clear()
+        pdfSyncTexRef.current = syncTexData
+        displayedPdfRequestRef.current = pdfRequest
         pdfRef.current = cached.proxy
         // Move to end of map (most recently used)
         pdfProxyCache.delete(documentId)
@@ -681,9 +723,9 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
           // pdf.js may detach the buffer it's given, so hand it a private copy
           const dataForPdfJs = new Uint8Array(pdfData.length)
           dataForPdfJs.set(pdfData)
-          loadingTask = pdfjsLib.getDocument({ data: dataForPdfJs })
+          loadingTask = pdfjsLib.getDocument({ data: dataForPdfJs, worker: getPdfWorker() })
         } else if (pdfUrl) {
-          loadingTask = pdfjsLib.getDocument(pdfUrl)
+          loadingTask = pdfjsLib.getDocument({ url: pdfUrl, worker: getPdfWorker() })
         } else {
           return
         }
@@ -697,13 +739,14 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         if (loadingTaskRef.current === loadingTask) loadingTaskRef.current = null
 
         // Check if cancelled before updating state (prevents race condition)
-        if (cancelled) {
+        if (cancelled || requestedPdfRef.current !== pdfRequest) {
           pdfDoc.destroy()
           return
         }
 
         // Clear page cache (don't destroy old proxy — it may be in pdfProxyCache)
         pageCacheRef.current.clear()
+        visibleTextRef.current = null
 
         // Cache the new proxy for instant restore later
         if (documentId) {
@@ -719,6 +762,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
           pdfRef.current.destroy()
         }
 
+        pdfSyncTexRef.current = syncTexData
+        displayedPdfRequestRef.current = pdfRequest
         pdfRef.current = pdfDoc
         setPdf(pdfDoc)
         setPageCount(pdfDoc.numPages)
@@ -761,20 +806,20 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         loadingTaskRef.current = null
       }
     }
-  }, [pdfUrl, pdfData, documentId])
+  }, [pdfUrl, pdfData, documentId, syncTexData, pdfRequest])
 
-  // Extract text from all PDF pages for scroll sync and inverse sync
-  // Updates progressively (per-page) so clicks work before full extraction completes
+  // Only the optional scroll sync mode searches text across every page.
+  // Selection and inverse sync use the text layer on the rendered page.
   useEffect(() => {
-    if (!pdf) {
-      pageTextsRef.current = new Map()
-      pageTextContentRef.current = new Map()
-      return
-    }
+    scrollTextsRef.current = null
+    if (pendingScrollRef.current?.request !== pdfRequest) pendingScrollRef.current = null
+    if (!pdf || !scrollSyncEnabled || displayedPdfRequestRef.current !== pdfRequest) return
 
     let cancelled = false
-    pageTextsRef.current = new Map()
-    pageTextContentRef.current = new Map()
+    const pages = new Map<number, string>()
+    const isCurrent = () => !cancelled && scrollSyncModeRef.current === true
+      && pdfRef.current === pdf && requestedPdfRef.current === pdfRequest
+      && displayedPdfRequestRef.current === pdfRequest
 
     const yieldToMain = () => new Promise<void>(resolve => {
       if ('requestIdleCallback' in window) {
@@ -785,28 +830,41 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
     })
 
     const extract = async () => {
+      let reportedError = false
       for (let i = 1; i <= pdf.numPages; i++) {
-        if (cancelled) return
         // Yield between pages to avoid blocking the main thread
         await yieldToMain()
-        if (cancelled || pdfRef.current !== pdf) return
-        const page = await pdf.getPage(i)
-        const content = await readPdfText(page)
-        if (cancelled) return
-        pageTextContentRef.current.set(i, content)
-        const text = content.items
-          .filter((item: any) => typeof item.str === 'string')
-          .map((item: any) => item.str)
-          .join(' ')
-        pageTextsRef.current.set(i, text)
+        if (!isCurrent()) return
+        let page: pdfjsLib.PDFPageProxy | undefined
+        try {
+          page = await pdf.getPage(i)
+          if (!isCurrent()) return
+          const content = await readPdfText(page)
+          if (!isCurrent()) return
+          const text = content.items.flatMap(item => 'str' in item ? [item.str] : []).join(' ')
+          pages.set(i, text.toLowerCase())
+        } catch (error) {
+          if (!isCurrent()) return
+          if (!reportedError) console.warn('PDF scroll sync text unavailable:', error)
+          reportedError = true
+        } finally {
+          if (page && pdfRef.current === pdf && pageCacheRef.current.get(i) !== page) page.cleanup()
+        }
+      }
+
+      scrollTextsRef.current = { request: pdfRequest, pdf, pages }
+      const pending = pendingScrollRef.current
+      if (pending?.request === pdfRequest) {
+        pendingScrollRef.current = null
+        revealScrollMatch(pending.words, pages)
       }
     }
 
     extract().catch(error => {
-      if (!cancelled && pdfRef.current === pdf) console.error('PDF text extraction failed:', error)
+      if (isCurrent()) console.error('PDF text extraction failed:', error)
     })
     return () => { cancelled = true }
-  }, [pdf])
+  }, [pdf, scrollSyncEnabled, pdfRequest, revealScrollMatch])
 
   // Get page from cache or load and cache it
   const getPageCached = useCallback(async (pdf: pdfjsLib.PDFDocumentProxy, pageNum: number): Promise<pdfjsLib.PDFPageProxy> => {
@@ -901,6 +959,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         viewport: viewport,
         canvas: offscreen,
       })
+      scheduleForegroundPdfRender(renderTaskRef.current)
       await renderTaskRef.current.promise
 
       // Check if this render is still current before blitting
@@ -916,9 +975,14 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
       if (context) {
         // Draw offscreen content to visible canvas (single blit, no clear needed)
         context.drawImage(offscreen, 0, 0)
+        syncTexService.prepareAfterPaint(pdfSyncTexRef.current)
       }
 
-      renderedPageRef.current = { page: currentPage, scale: renderScale, pdf }
+      // The canvas now belongs to this render. Retire the old text before
+      // awaiting extraction so a click cannot use stale geometry.
+      visibleTextRef.current = null
+      textLayerRef.current?.replaceChildren()
+      renderedPageRef.current = { id: thisRenderId, page: currentPage, scale: renderScale, pdf }
       // Store for reuse by subsequent same-scale renders
       offscreenCanvasRef.current = offscreen
 
@@ -927,6 +991,8 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
         const textContent = await readPdfText(page)
         if (thisRenderId !== renderIdRef.current || pdfRef.current !== pdf) return
         await renderTextLayer(page, viewport, textContent)
+        if (thisRenderId !== renderIdRef.current || pdfRef.current !== pdf) return
+        visibleTextRef.current = { renderId: thisRenderId, content: textContent }
         if (searchMatches.length > 0) renderSearchHighlights(textContent, viewport)
       } catch (textError) {
         if (thisRenderId === renderIdRef.current && pdfRef.current === pdf) console.warn('PDF text layer unavailable:', textError)
@@ -1763,6 +1829,7 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
           >
             <Download size={14} />
           </button>
+          {activePatch && <span role="status" title="Compile to update the downloadable PDF">Paragraph preview</span>}
         </div>
 
         <div className="controls-center">
@@ -1886,6 +1953,9 @@ const PDFViewer: React.FC<PDFViewerProps> = React.memo(({ pdfUrl, pdfData, onCom
           <div className="pdf-page-wrapper">
             <div className={`pdf-page-filter ${dark ? 'dark' : ''}`}>
               <canvas ref={canvasRef} className="pdf-page-canvas" />
+              {activePatch && pdf && activePatch.page === currentPage && (
+                <ParagraphOverlay patch={activePatch} document={pdf} scale={renderScale} onFailure={onParagraphFailure} />
+              )}
             </div>
             <div ref={textLayerRef} className="pdf-text-layer" />
             <div ref={highlightLayerRef} className="pdf-search-highlight-layer" />

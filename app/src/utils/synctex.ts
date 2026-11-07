@@ -51,7 +51,7 @@ export interface SyncRecord {
 
 /** Parsed SyncTeX data */
 export interface SyncTexData {
-  inputs: Map<number, string>  // input number → filename
+  inputs: ReadonlyMap<number, string>  // immutable input number → filename
   records: SyncRecord[]
   magnification: number
   xOffset: number
@@ -241,6 +241,48 @@ function pdfPointsToSp(pdfPts: number, unitLength: number): number {
   return (texPoints * SP_PER_PT) / unitLength
 }
 
+/** Lexical filesystem normalization; preserve Unicode and case. */
+export function normalizeSyncTexFilename(filename: string): string {
+  const path = filename.replace(/\\/g, '/')
+  const root = /^(?:[A-Za-z]:)?\//.exec(path)?.[0] ?? ''
+  const parts: string[] = []
+  for (const part of path.slice(root.length).split('/')) {
+    if (!part || part === '.') continue
+    if (part === '..') {
+      if (parts.length && parts[parts.length - 1] !== '..') parts.pop()
+      else if (!root) parts.push(part)
+    } else parts.push(part)
+  }
+  return root + parts.join('/')
+}
+
+/** First native occurrence wins for full names and component suffixes. */
+export function sourceInputIndex(inputs: ReadonlyMap<number, string>): Map<string, number> {
+  const index = new Map<string, number>()
+  for (const [number, filename] of inputs) {
+    for (const name of [filename.replace(/\\/g, '/'), normalizeSyncTexFilename(filename)]) {
+      if (!index.has(name)) index.set(name, number)
+      for (let at = name.indexOf('/'); at >= 0; at = name.indexOf('/', at + 1)) {
+        const suffix = name.slice(at + 1)
+        if (suffix && !index.has(suffix)) index.set(suffix, number)
+      }
+    }
+  }
+  return index
+}
+
+// Parsed input maps are immutable. Weak keys do not retain an old document's
+// mapping after the service replaces it; only names and IDs enter this index.
+const sourceInputIndexes = new WeakMap<ReadonlyMap<number, string>, Map<string, number>>()
+
+/** Resolve names through the same canonical index for all navigation callers. */
+export function sourceInputNumber(syncData: Pick<SyncTexData, 'inputs'>, filename?: string): number {
+  if (!filename) return 1
+  let index = sourceInputIndexes.get(syncData.inputs)
+  if (!index) { index = sourceInputIndex(syncData.inputs); sourceInputIndexes.set(syncData.inputs, index) }
+  return index.get(filename.replace(/\\/g, '/')) ?? index.get(normalizeSyncTexFilename(filename)) ?? 1
+}
+
 /**
  * Forward sync: Find PDF location for a source line
  * Returns coordinates in PDF points (72 DPI, origin top-left)
@@ -254,16 +296,7 @@ export function forwardSync(
 ): PdfLocation | null {
   if (!syncData || syncData.records.length === 0) return null
 
-  // Find input number for filename
-  let targetInput = 1
-  if (filename) {
-    for (const [num, name] of syncData.inputs) {
-      if (name === filename || name.endsWith('/' + filename) || name.endsWith('\\' + filename)) {
-        targetInput = num
-        break
-      }
-    }
-  }
+  const targetInput = sourceInputNumber(syncData, filename)
 
   // Find records for this line (or closest line)
   let bestRecord: SyncRecord | null = null
@@ -282,17 +315,22 @@ export function forwardSync(
 
   if (!bestRecord) return null
 
+  return syncRecordToPdfLocation(syncData, bestRecord)
+}
+
+/** Convert an indexed native record through the same coordinate rules. */
+export function syncRecordToPdfLocation(syncData: Pick<SyncTexData, 'unitLength' | 'xOffset' | 'yOffset'>, record: SyncRecord): PdfLocation {
   // Convert sp to PDF points
-  const x = spToPdfPoints(bestRecord.x + syncData.xOffset, syncData.unitLength)
+  const x = spToPdfPoints(record.x + syncData.xOffset, syncData.unitLength)
   // SyncTeX records already use a top-left origin, unlike native PDF coordinates.
-  const y = spToPdfPoints(bestRecord.y + syncData.yOffset, syncData.unitLength)
+  const y = spToPdfPoints(record.y + syncData.yOffset, syncData.unitLength)
 
   return {
-    page: bestRecord.page,
+    page: record.page,
     x: Math.max(0, x),
     y: Math.max(0, y),
-    width: bestRecord.width ? spToPdfPoints(bestRecord.width, syncData.unitLength) : undefined,
-    height: bestRecord.height ? spToPdfPoints(bestRecord.height, syncData.unitLength) : undefined
+    width: record.width ? spToPdfPoints(record.width, syncData.unitLength) : undefined,
+    height: record.height ? spToPdfPoints(record.height, syncData.unitLength) : undefined
   }
 }
 
@@ -343,7 +381,9 @@ export function inverseSync(
  */
 export function getPageCount(syncData: SyncTexData): number {
   if (!syncData || syncData.records.length === 0) return 0
-  return Math.max(...syncData.records.map(r => r.page))
+  let page = 0
+  for (const record of syncData.records) page = Math.max(page, record.page)
+  return page
 }
 
 /**
@@ -378,8 +418,8 @@ export function getPageLineRange(syncData: SyncTexData, page: number): { first: 
 
   if (linesOnPage.length === 0) return null
 
-  return {
-    first: Math.min(...linesOnPage),
-    last: Math.max(...linesOnPage)
-  }
+  let first = Infinity
+  let last = -Infinity
+  for (const line of linesOnPage) { first = Math.min(first, line); last = Math.max(last, line) }
+  return { first, last }
 }

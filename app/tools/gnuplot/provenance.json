@@ -1,0 +1,21 @@
+{
+  "upstream": "https://sourceforge.net/projects/gnuplot/files/gnuplot/6.0.2/gnuplot-6.0.2.tar.gz",
+  "sourceSha256": "f68a3b0bbb7bbbb437649674106d94522c00bf2f285cce0c19c3180b1ee7e738",
+  "version": "6.0 patchlevel 2-siglum-wasm.1",
+  "toolchainImage": "emscripten/emsdk@sha256:e856cd59d54fd143366c2df314043d63a1ca23ab43521e0f30f9d9a7ce6d43e0",
+  "artifacts": {
+    "gnuplot.js": {
+      "bytes": 79596,
+      "sha256": "25936e1d3f3400ddab16b70cdfca2566e014fac81d719a5b629fb99772daf27c"
+    },
+    "gnuplot.wasm": {
+      "bytes": 1605739,
+      "sha256": "3e7cea42d8884599d15bf41f11aaacec7d1b0fbadcf925b7ccb1320ee195923c"
+    }
+  },
+  "changes": [
+    "Guard the no-fenv errno fallback so successful special-function evaluations do not fail with errno zero.",
+    "Deny native system/popen calls; this provider does not expose subprocesses.",
+    "Worker-only build with a 16 MiB initial heap and 64 MiB maximum."
+  ]
+}

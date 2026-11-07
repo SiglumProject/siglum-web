@@ -29,6 +29,7 @@ interface UseFileManagerReturn {
   isLoading: boolean
   error: string | null
   failedRestorePath: string | null
+  dismissFailedRestore: () => void
   createRecoveryDocument: () => Promise<void>
   openFile: (path: string) => Promise<boolean>
   saveFile: (path: string, content: string) => Promise<void>
@@ -90,8 +91,9 @@ export function useFileManager(): UseFileManagerReturn {
             if (cancelled) return
             return
           } catch {
-            fileManager.clearURLFile()
             if (cancelled) return
+            setFailedRestorePath(urlPath)
+            throw new Error(`Could not reopen "${urlPath.split('/').pop()}". Reload to retry or choose another saved document. Your saved selection has been kept.`)
           }
         }
 
@@ -147,7 +149,9 @@ export function useFileManager(): UseFileManagerReturn {
     if (needsEditor) setIsLoading(true)
 
     try {
-      await fileManager.openFile(path)
+      const opened = await fileManager.openFile(path)
+      setFailedRestorePath(null)
+      if (fileManager.getFilePathFromURL()) fileManager.setURLParam(opened.path)
       return true
     } catch (err) {
       const name = path.split('/').pop() || path
@@ -248,11 +252,20 @@ export function useFileManager(): UseFileManagerReturn {
         counter++
       }
 
-      await fileManager.createFile(`${projectRoot}/${name}`, '')
+      const created = await fileManager.createFile(`${projectRoot}/${name}`, '')
+      setFailedRestorePath(null)
+      if (fileManager.getFilePathFromURL()) fileManager.setURLParam(created.path)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create new file')
     }
   }, [])
+
+  const dismissFailedRestore = useCallback(() => {
+    if (!failedRestorePath) return
+    fileManager.forgetSavedSelection(failedRestorePath)
+    setFailedRestorePath(null)
+    setError(null)
+  }, [failedRestorePath])
 
   const createRecoveryDocument = useCallback(async () => {
     setIsLoading(true)
@@ -262,7 +275,7 @@ export function useFileManager(): UseFileManagerReturn {
       const suffix = Array.from(crypto.getRandomValues(new Uint8Array(8)), byte =>
         byte.toString(16).padStart(2, '0')
       ).join('')
-      await fileManager.createFile(
+      const created = await fileManager.createFile(
         `/project/src/untitled-${suffix}.tex`,
         String.raw`\documentclass{article}
 \begin{document}
@@ -270,6 +283,8 @@ export function useFileManager(): UseFileManagerReturn {
 \end{document}
 `
       )
+      setFailedRestorePath(null)
+      if (fileManager.getFilePathFromURL()) fileManager.setURLParam(created.path)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create a recovery document')
@@ -289,6 +304,7 @@ export function useFileManager(): UseFileManagerReturn {
     isLoading,
     error,
     failedRestorePath,
+    dismissFailedRestore,
     createRecoveryDocument,
     openFile,
     saveFile,

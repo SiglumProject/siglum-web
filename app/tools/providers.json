@@ -1,0 +1,49 @@
+[
+  {
+    "command": "latexminted",
+    "kind": "process",
+    "directory": "minted",
+    "adapter": "minted-adapter.mjs",
+    "export": "runMinted",
+    "worker": "minted-worker.js",
+    "scripts": [
+      "python/pyodide.js",
+      "python/pyodide.asm.js"
+    ],
+    "connect": [
+      "python/"
+    ],
+    "wasm": true
+  },
+  {
+    "command": "biber",
+    "kind": "auxiliary",
+    "directory": "biber",
+    "adapter": "provider.mjs",
+    "export": "runBiber",
+    "worker": "biber-worker.js",
+    "scripts": [
+      "assets/biber.js"
+    ],
+    "connect": [
+      "assets/biber.wasm",
+      "assets/biber.data"
+    ],
+    "wasm": true
+  },
+  {
+    "command": "gnuplot",
+    "kind": "process",
+    "directory": "gnuplot",
+    "adapter": "provider.mjs",
+    "export": "runGnuplot",
+    "worker": "gnuplot-worker.mjs",
+    "scripts": [
+      "assets/gnuplot.js"
+    ],
+    "connect": [
+      "assets/gnuplot.wasm"
+    ],
+    "wasm": true
+  }
+]

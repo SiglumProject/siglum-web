@@ -2,7 +2,7 @@
  * SyncTexService - Centralized SyncTeX data management with indexed lookups
  *
  * Wraps the synctex.ts parser and builds indexed data structures for O(1)
- * forward/inverse sync lookups. Also manages scroll sync coordination
+ * page lookups and bounded source-line lookups. Also manages scroll sync coordination
  * via a leader-follower lock to prevent feedback loops.
  *
  * Usage:
@@ -10,7 +10,7 @@
  * import syncTexService from './SyncTexService'
  *
  * // After compilation succeeds
- * syncTexService.update(rawSyncTexString)
+ * syncTexService.queueUpdate(rawSyncTexString)
  *
  * // Forward sync: editor line → PDF position
  * const loc = syncTexService.forwardSync(42)
@@ -22,10 +22,9 @@
 
 import {
   parseSyncTeX,
-  forwardSync as rawForwardSync,
+  sourceInputNumber,
+  syncRecordToPdfLocation,
   inverseSync as rawInverseSync,
-  getPageCenterLine as rawGetPageCenterLine,
-  getPageLineRange as rawGetPageLineRange,
   type SyncTexData,
   type PdfLocation,
   type SourceLocation,
@@ -35,15 +34,19 @@ import {
 type UpdateListener = () => void
 
 class SyncTexServiceImpl {
-  private data: SyncTexData | null = null
+  private data: Omit<SyncTexData, 'records'> | null = null
+  private pendingData: string | null = null
+  private mappingSource: string | null = null
+  private scheduledData: string | null = null
   private listeners: Set<UpdateListener> = new Set()
 
   // Indexes for O(1) lookups
   private pageIndex: Map<number, SyncRecord[]> = new Map()
-  private lineIndex: Map<number, Map<number, SyncRecord[]>> = new Map() // inputNumber → line → records
+  private lineIndex: Map<number, Map<number, SyncRecord>> = new Map() // inputNumber → line → records
 
   // Sorted waypoints for scroll sync interpolation (built from input 1 records)
   private scrollWaypoints: { line: number; page: number }[] = []
+  private pageSummaries = new Map<number, { center: number; first: number; last: number }>()
 
   // Page heights from PDF.js (in PDF points at 72 DPI)
   private pageHeights: Map<number, number> = new Map()
@@ -54,49 +57,62 @@ class SyncTexServiceImpl {
     timeout: ReturnType<typeof setTimeout> | null
   } = { leader: null, timeout: null }
 
-  /**
-   * Update with new SyncTeX data from a compilation
-   */
-  update(rawData: string): void {
+  /** Associate the mapping with the new PDF without delaying its first draw. */
+  queueUpdate(rawData: string): void {
+    this.resetData()
+    this.pendingData = rawData
+    this.mappingSource = rawData
+  }
+
+  /** The viewer schedules indexing after it draws the matching PDF. */
+  prepareAfterPaint(rawData: string | undefined): void {
+    if (!rawData || this.pendingData !== rawData || this.scheduledData === rawData) return
+    this.scheduledData = rawData
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (this.pendingData === rawData) this.indexPendingData()
+    }))
+  }
+
+  private indexPendingData(): void {
+    if (this.pendingData === null) return
+    const rawData = this.pendingData
+    this.pendingData = null
+    this.scheduledData = null
     const parsed = parseSyncTeX(rawData)
-    if (!parsed) return
-
-    this.data = parsed
-    this.buildIndexes()
-
-    // Debug: log what we parsed and what boundaries were computed
-    const boundaries = this.getPageBoundaries()
-    const input1Count = parsed.records.filter(r => r.inputNumber === 1).length
-    const pagesWithInput1 = new Set(parsed.records.filter(r => r.inputNumber === 1).map(r => r.page)).size
-    console.log('[SyncTeX] Parsed:', {
-      records: parsed.records.length,
-      recordsInput1: input1Count,
-      pages: this.pageIndex.size,
-      pagesWithInput1,
-      boundaries: boundaries.length,
-      boundaryPages: boundaries.map(b => `p${b.page}@L${b.line}`),
-      inputs: Object.fromEntries(parsed.inputs),
-    })
-
+    if (parsed) {
+      const { records, ...metadata } = parsed
+      this.data = metadata
+      this.buildIndexes(records)
+    } else {
+      this.data = null
+      this.buildIndexes([])
+    }
     this.notifyListeners()
   }
 
-  /**
-   * Clear SyncTeX data (e.g. when document changes)
-   * Note: During recompilation, prefer keeping old data until new data arrives.
-   */
-  clear(): void {
+  private resetData(): void {
     this.data = null
+    this.mappingSource = null
+    this.pendingData = null
+    this.scheduledData = null
     this.pageIndex.clear()
     this.lineIndex.clear()
+    this.scrollWaypoints = []
+    this.pageSummaries.clear()
+  }
+
+  clear(): void {
+    this.resetData()
     this.notifyListeners()
   }
 
-  /**
-   * Check if SyncTeX data is available
-   */
+  /** Shares an index only with the exact SyncTeX content for the displayed PDF. */
+  matchesMapping(rawData: string | null | undefined): boolean {
+    return !!rawData && this.mappingSource === rawData
+  }
+
   isAvailable(): boolean {
-    return this.data !== null
+    return this.pendingData !== null || this.data !== null
   }
 
   /**
@@ -115,14 +131,11 @@ class SyncTexServiceImpl {
    * Forward sync: source line → PDF location (PDF points, origin top-left)
    */
   forwardSync(line: number, filename?: string): PdfLocation | null {
+    this.indexPendingData()
     if (!this.data) return null
-    // First pass with default height to find the page
-    const preliminary = rawForwardSync(this.data, line, filename, 792)
-    if (!preliminary) return null
-    // Pass the page geometry through the compatibility API
-    const pageHeight = this.getPageHeight(preliminary.page)
-    const result = rawForwardSync(this.data, line, filename, pageHeight)
-    console.log('[SyncTeX] forwardSync line', line, '→', result)
+    const record = this.nearestRecord(line, this.inputNumber(filename))
+    if (!record) return null
+    const result = syncRecordToPdfLocation(this.data, record)
     return result
   }
 
@@ -131,9 +144,11 @@ class SyncTexServiceImpl {
    * x, y are in PDF points (72 DPI, origin top-left)
    */
   inverseSync(page: number, x: number, y: number): SourceLocation | null {
+    this.indexPendingData()
     if (!this.data) return null
-    const result = rawInverseSync(this.data, page, x, y, this.getPageHeight(page))
-    console.log('[SyncTeX] inverseSync page', page, 'at', { x, y }, '→', result)
+    const records = this.pageIndex.get(page)
+    if (!records) return null
+    const result = rawInverseSync({ ...this.data, records }, page, x, y, this.getPageHeight(page))
     return result
   }
 
@@ -141,46 +156,27 @@ class SyncTexServiceImpl {
    * Get the page that contains a given source line
    */
   getPageForLine(line: number, inputNumber: number = 1): number | null {
-    const inputMap = this.lineIndex.get(inputNumber)
-    if (!inputMap) return null
-
-    // Try exact match first
-    const records = inputMap.get(line)
-    if (records && records.length > 0) return records[0].page
-
-    // Find nearest line
-    let bestLine = -1
-    let bestDist = Infinity
-    for (const l of inputMap.keys()) {
-      const dist = Math.abs(l - line)
-      if (dist < bestDist) {
-        bestDist = dist
-        bestLine = l
-      }
-    }
-
-    if (bestLine >= 0) {
-      const nearRecords = inputMap.get(bestLine)
-      if (nearRecords && nearRecords.length > 0) return nearRecords[0].page
-    }
-
-    return null
+    this.indexPendingData()
+    return this.nearestRecord(line, inputNumber)?.page ?? null
   }
 
   /**
    * Get center line for a page (for scroll sync: PDF page → editor line)
    */
   getCenterLineForPage(page: number): number | null {
+    this.indexPendingData()
     if (!this.data) return null
-    return rawGetPageCenterLine(this.data, page)
+    return this.pageSummary(page)?.center ?? null
   }
 
   /**
    * Get line range for a page
    */
   getLineRangeForPage(page: number): { first: number; last: number } | null {
+    this.indexPendingData()
     if (!this.data) return null
-    return rawGetPageLineRange(this.data, page)
+    const summary = this.pageSummary(page)
+    return summary ? { first: summary.first, last: summary.last } : null
   }
 
   /**
@@ -188,23 +184,25 @@ class SyncTexServiceImpl {
    * Only returns lines from the main input (user's document, not system files).
    * Used for inverse sync: gives the exact candidate lines to score.
    */
-  getLinesForPage(page: number): number[] {
+  getLinesForPage(page: number, filename?: string): number[] {
+    this.indexPendingData()
     const records = this.pageIndex.get(page)
     if (!records) return []
 
     // Collect unique lines from main input (input 1), tracking Y per line
     const lineY = new Map<number, number>()
+    const input = this.data ? this.inputNumber(filename) : 1
     for (const r of records) {
-      if (r.inputNumber !== 1) continue
-      // Keep the largest Y (topmost on page — SyncTeX Y is from bottom)
-      if (!lineY.has(r.line) || r.y > lineY.get(r.line)!) {
+      if (r.inputNumber !== input) continue
+      // SyncTeX Y increases down the page. Keep the first/topmost occurrence.
+      if (!lineY.has(r.line) || r.y < lineY.get(r.line)!) {
         lineY.set(r.line, r.y)
       }
     }
 
-    // Sort by Y descending (SyncTeX Y is from bottom, so larger Y = higher on page)
+    // Sort top to bottom in the same coordinates as forward/inverse sync.
     return Array.from(lineY.entries())
-      .sort((a, b) => b[1] - a[1])
+      .sort((a, b) => a[1] - b[1])
       .map(([line]) => line)
   }
 
@@ -216,6 +214,7 @@ class SyncTexServiceImpl {
    * a page-1 marker at \begin{document} if front matter pages got filtered out.
    */
   getPageBoundaries(beginDocLine: number = 0): { line: number; page: number }[] {
+    this.indexPendingData()
     if (this.scrollWaypoints.length === 0) return []
 
     // Filter out preamble noise
@@ -239,6 +238,7 @@ class SyncTexServiceImpl {
    * Get the number of pages in the document
    */
   getPageCount(): number {
+    this.indexPendingData()
     return this.pageIndex.size
   }
 
@@ -249,6 +249,7 @@ class SyncTexServiceImpl {
    * Accounts for non-uniform content density (figures, tables, etc).
    */
   lineToPage(line: number): number | null {
+    this.indexPendingData()
     const wp = this.scrollWaypoints
     if (wp.length === 0) return null
 
@@ -281,7 +282,8 @@ class SyncTexServiceImpl {
    * Get input files map
    */
   getInputFiles(): Map<number, string> {
-    return this.data?.inputs ?? new Map()
+    this.indexPendingData()
+    return new Map(this.data?.inputs)
   }
 
   /**
@@ -341,6 +343,37 @@ class SyncTexServiceImpl {
 
   // --- Private ---
 
+  private inputNumber(filename?: string): number {
+    return this.data ? sourceInputNumber(this.data, filename) : 1
+  }
+
+  private nearestRecord(line: number, inputNumber: number): SyncRecord | null {
+    const lines = this.lineIndex.get(inputNumber)
+    if (!lines) return null
+    const exact = lines.get(line)
+    if (exact) return exact
+    let best: SyncRecord | null = null
+    let distance = Infinity
+    // Insertion order is the first native occurrence of a line. Strictly less
+    // preserves the whole-document scan's first-record behavior on equal ties.
+    for (const [sourceLine, record] of lines) {
+      const next = Math.abs(sourceLine - line)
+      if (next < distance) { distance = next; best = record }
+    }
+    return best
+  }
+
+  private pageSummary(page: number): { center: number; first: number; last: number } | null {
+    const cached = this.pageSummaries.get(page)
+    if (cached) return cached
+    const records = this.pageIndex.get(page)
+    if (!records?.length) return null
+    const lines = records.map(record => record.line).sort((a, b) => a - b)
+    const summary = { center: lines[Math.floor(lines.length / 2)], first: lines[0], last: lines[lines.length - 1] }
+    this.pageSummaries.set(page, summary)
+    return summary
+  }
+
   private extendLockTimeout(): void {
     if (this.scrollLock.timeout) clearTimeout(this.scrollLock.timeout)
     this.scrollLock.timeout = setTimeout(() => {
@@ -349,12 +382,13 @@ class SyncTexServiceImpl {
     }, 150)
   }
 
-  private buildIndexes(): void {
+  private buildIndexes(records: readonly SyncRecord[]): void {
     this.pageIndex.clear()
     this.lineIndex.clear()
     this.scrollWaypoints = []
+    this.pageSummaries.clear()
 
-    if (!this.data) return
+    if (!records.length) return
 
     // Collect unique (line → page) pairs for waypoint table.
     // Only use records from the main input (input 1 = user's document).
@@ -363,7 +397,7 @@ class SyncTexServiceImpl {
     const mainInput = 1
     const linePageMap = new Map<number, number>()
 
-    for (const record of this.data.records) {
+    for (const record of records) {
       // Page index
       let pageRecords = this.pageIndex.get(record.page)
       if (!pageRecords) {
@@ -378,12 +412,10 @@ class SyncTexServiceImpl {
         inputMap = new Map()
         this.lineIndex.set(record.inputNumber, inputMap)
       }
-      let lineRecords = inputMap.get(record.line)
-      if (!lineRecords) {
-        lineRecords = []
-        inputMap.set(record.line, lineRecords)
-      }
-      lineRecords.push(record)
+      // Source navigation needs the first native record for each line only.
+      // Every record remains owned by its page index; avoid a second set of
+      // per-line arrays and the redundant whole-document reference array.
+      if (!inputMap.has(record.line)) inputMap.set(record.line, record)
 
       // Waypoint: only main input records (skip package/class file records)
       if (record.inputNumber === mainInput && !linePageMap.has(record.line)) {

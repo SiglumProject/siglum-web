@@ -1,5 +1,7 @@
-import { defineConfig, loadEnv } from 'vite'
+import { defineConfig, searchForWorkspaceRoot, loadEnv } from 'vite'
 import type { UserConfig } from 'vite'
+import { refreshCheckpointAssets } from './scripts/checkpointAssets'
+import { browserToolsPlugin } from './scripts/browserToolsPlugin'
 import react from '@vitejs/plugin-react'
 import wasm from 'vite-plugin-wasm'
 import { resolve, dirname } from 'path'
@@ -7,6 +9,9 @@ import { copyFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { prerenderLanding } from './prerender'
 import { resolveInstalledRuntime } from '../scripts/hosted-runtime'
+
+const require = createRequire(import.meta.url)
+const engineDirectory = dirname(require.resolve('@siglum/engine'))
 
 // https://vite.dev/config/
 export default defineConfig(async ({ command, mode }): Promise<UserConfig> => {
@@ -19,9 +24,12 @@ export default defineConfig(async ({ command, mode }): Promise<UserConfig> => {
   // Warnings, errors, and compiler log callbacks remain intact.
   esbuild: command === 'build' ? { pure: ['console.log', 'console.info', 'console.debug'] } : undefined,
   plugins: [
+    browserToolsPlugin(__dirname),
     {
       name: 'sync-engine-worker',
       configResolved(config) {
+        refreshCheckpointAssets(__dirname)
+        copyFileSync(resolve(engineDirectory, 'worker.js'), resolve(__dirname, 'public/worker.js'))
         if (hosted) {
           config.env.VITE_API_BASE = hosted.apiBase
           config.env.VITE_ENGINE_RELEASE = hosted.releaseId
@@ -36,10 +44,25 @@ export default defineConfig(async ({ command, mode }): Promise<UserConfig> => {
           }
         }
       },
+      configureServer(server) {
+        const worker = resolve(engineDirectory, 'worker.js')
+        const inputs = [worker, resolve(engineDirectory, 'checkpoint-api.bundle.mjs'),
+          resolve(__dirname, 'src/assets/checkpoint/pdftex.js'), resolve(__dirname, 'src/assets/checkpoint/pdftex.wasm'),
+          resolve(__dirname, 'src/assets/checkpoint/pdftex-io.js'), resolve(__dirname, 'src/assets/checkpoint/pdftex-io.wasm')]
+        server.watcher.add(inputs)
+        const changed = (path: string) => {
+          if (!inputs.includes(path)) return
+          copyFileSync(worker, resolve(__dirname, 'public/worker.js'))
+          refreshCheckpointAssets(__dirname)
+          server.ws.send({ type: 'full-reload' })
+        }
+        server.watcher.on('change', changed)
+        server.httpServer?.once('close', () => server.watcher.off('change', changed))
+      },
       buildStart() {
-        const require = createRequire(import.meta.url)
-        const engineEntry = require.resolve('@siglum/engine')
-        copyFileSync(resolve(dirname(engineEntry), 'worker.js'), resolve(__dirname, 'public/worker.js'))
+        if (command === 'build') {
+          copyFileSync(resolve(engineDirectory, 'worker.js'), resolve(__dirname, 'public/worker.js'))
+        }
       },
     },
     react(),
@@ -94,6 +117,10 @@ export default defineConfig(async ({ command, mode }): Promise<UserConfig> => {
     },
   },
   server: {
+    fs: {
+      // Worker helpers and binary assets in the linked SDK are loaded by URL.
+      allow: [searchForWorkspaceRoot(__dirname), engineDirectory],
+    },
     port: 5174,
     proxy: {
       '/citations/api/zotero': {

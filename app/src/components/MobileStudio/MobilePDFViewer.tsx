@@ -7,7 +7,9 @@ import { usePdfTheme } from '../../hooks/usePdfTheme'
 import PdfThemeToggle from '../PdfThemeToggle'
 import PdfPageControl from '../PdfPageControl'
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/legacy/build/pdf.worker.min.mjs', import.meta.url).toString()
+import { scheduleForegroundPdfRender } from '../../services/foregroundPdfRender'
+import { getPdfWorker, pdfWorkerUrl } from '../../services/PdfWorker'
+export const mobilePdfWorkerUrl = pdfWorkerUrl
 const clampZoom = (zoom: number) => Math.max(1, Math.min(4, zoom))
 type PageSize = { width: number; height: number }
 
@@ -45,6 +47,7 @@ function Page({ pdf, number, size, width, scrollRoot }: {
       const context = canvas.getContext('2d')
       if (!context) throw new Error('Canvas unavailable')
       task = page.render({ canvas, canvasContext: context, viewport, transform: [ratio, 0, 0, ratio, 0, 0] })
+      scheduleForegroundPdfRender(task)
       await task.promise
       if (cancelled) return
       // Keep the previous bitmap visible while a sharper zoomed page renders.
@@ -112,7 +115,7 @@ export default function MobilePDFViewer({ pdfData, documentId, onCompile, isComp
     if (!pdfData) { setMessage('Compile your document to see its PDF.'); return }
     setMessage('Loading PDF…')
     let cancelled = false
-    const task = pdfjs.getDocument({ data: Uint8Array.from(pdfData) })
+    const task = pdfjs.getDocument({ data: Uint8Array.from(pdfData), worker: getPdfWorker() })
     void (async () => {
       const document = await task.promise
       const dimensions: PageSize[] = []

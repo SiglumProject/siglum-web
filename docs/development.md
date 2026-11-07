@@ -119,3 +119,17 @@ credentials and retains local files.
 - Cloudflare Pages (hosting)
 
 Contributor guidance: [AGENTS.md](../AGENTS.md).
+
+### Coordinated worktrees
+
+`bun run link:local` creates the private source workspace and installs its shared
+dependencies without replacing native runtime files. Library worktrees can be
+selected with `SIGLUM_ENGINE_SOURCE`, `SIGLUM_FILESYSTEM_SOURCE` and
+`SIGLUM_GIT_SOURCE`. Alternatively, keep those three paths under the corresponding
+`engine`, `filesystem` and `git` keys in ignored
+`.local-release/source-paths.json`. Relative paths are resolved from this checkout.
+The published package ranges and normal lockfile stay unchanged.
+
+Use the matching local compiler runtime for the performance branch. The BusyTeX
+fork is a Git submodule; npm libraries are selected by this source workspace.
+Matching branch names alone do not select another repository's code.

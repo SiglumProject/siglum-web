@@ -27,6 +27,7 @@ export interface EventMap {
   goToLine: { line: number }
   insertText: { text: string }
   triggerCompile: void
+  editorFocus: { path: string; offsetUTF16: number }
 
   // Document events
   documentChanged: { id: string; content: string }

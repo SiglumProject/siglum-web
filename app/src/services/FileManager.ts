@@ -127,6 +127,28 @@ class FileManagerService {
     if (file) file.cursorPosition = position
   }
 
+  /** Refresh open snapshots after a Git operation changes the working tree. */
+  async refreshOpenGitFiles(): Promise<void> {
+    for (const [path, file] of this.openFiles) {
+      if (!path.startsWith('/git/') || file.isDirty) continue
+      const original = file.content
+      const content = await fileSystem.exists(path) ? await fileSystem.readFile(path) : null
+      if (this.openFiles.get(path) !== file || file.isDirty || file.content !== original) continue
+      if (content === null) {
+        this.closeFile(path)
+        if (this.currentPath === path) {
+          this.currentPath = null
+          this.saveCurrentFile()
+          this.clearURLFile()
+        }
+      } else if (content !== original) {
+        this.openFiles.set(path, { ...file, content })
+        UndoManager.init(path, content)
+      }
+    }
+    this.notify()
+  }
+
   /**
    * Open a file by path
    */
@@ -271,6 +293,19 @@ class FileManagerService {
     if (!this.openFiles.get(normalizedPath)?.isDirty) this.openFiles.delete(normalizedPath)
     this.recentPaths = this.recentPaths.filter(p => p !== normalizedPath)
     this.saveRecent()
+  }
+
+  /** Dismiss a failed restore without touching the document or other selections. */
+  forgetSavedSelection(path: string): void {
+    const normalizedPath = this.normalizePath(path)
+    const urlPath = this.getFilePathFromURL()
+    if (urlPath && this.normalizePath(urlPath) === normalizedPath) this.clearURLFile()
+    try {
+      const saved = localStorage.getItem(CURRENT_FILE_KEY)
+      if (saved && this.normalizePath(saved) === normalizedPath) localStorage.removeItem(CURRENT_FILE_KEY)
+      if (!localStorage.getItem(CURRENT_FILE_KEY) && !this.currentPath) localStorage.removeItem('siglum_entered_editor')
+    } catch { /* Storage may be restricted. */ }
+    if (this.currentPath !== normalizedPath) this.closeFile(normalizedPath)
   }
 
   /**

@@ -59,6 +59,10 @@ app/public/core/
 .local-release/
 
 !RELEASE_NOTES.md
+
+# Regenerated immutable provider copies and local experiment output
+app/public/tools/
+.local-experiments/
 !AGENTS.md
 !app/public/docs/
 !app/public/docs/**
@@ -67,3 +71,7 @@ app/public/core/
 !/docs/
 /docs/*
 !/docs/development.md
+
+# Generated assets for the opt-in paragraph laboratory
+app/public/paragraph-runtime/*
+!app/public/paragraph-runtime/worker.js

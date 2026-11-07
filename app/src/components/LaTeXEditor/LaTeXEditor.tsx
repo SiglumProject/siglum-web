@@ -16,6 +16,7 @@ import { createBatchedLogger } from '@siglum/engine'
 import EventBus from '../../services/EventBus'
 import GitService from '../../services/GitService'
 import syncTexService from '../../services/SyncTexService'
+import { compilationContext } from '../../services/CompilationFiles'
 import CitationPopover from '../CitationPopover'
 import SelectionContextMenu from '../SelectionContextMenu'
 import stateStore from '../../services/FileStateStore'
@@ -734,7 +735,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
     if (!view || view.state.selection.main.empty || mobileApiRef) return false
     const selection = view.state.selection.main
     const line = view.state.doc.lineAt(selection.from).number
-    setSelectionMenu({ x, y, line, text: view.state.sliceDoc(selection.from, selection.to), canJump: Boolean(syncTexService.forwardSync(line, documentId)) })
+    setSelectionMenu({ x, y, line, text: view.state.sliceDoc(selection.from, selection.to), canJump: Boolean(syncTexService.forwardSync(line, compilationContext(documentId).mainFile)) })
     return true
   }
   const [consoleOpen, setConsoleOpen] = useState(false)
@@ -910,7 +911,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
       const wordLower = word.toLowerCase()
 
       // Stage 1: Get exact source lines for this page from SyncTeX (sorted top→bottom)
-      const pageLines = syncTexService.getLinesForPage(page)
+      const pageLines = syncTexService.getLinesForPage(page, compilationContext(documentIdRef.current).mainFile)
 
       // Score candidate lines by context word overlap against raw source
       // SyncTeX candidates only include lines that produce output (no comments/preamble)
@@ -1118,7 +1119,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
       }
 
       // Emit forward sync event to PDF viewer with search text
-      EventBus.emit('forwardSync', { line, lineText: searchText })
+      EventBus.emit('forwardSync', { line, lineText: searchText, filename: compilationContext(documentIdRef.current).mainFile })
     }
 
     container.addEventListener('click', handleClick)
@@ -1182,6 +1183,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
       if (update.selectionSet || update.docChanged) {
         const selection = update.state.selection.main
         const line = update.state.doc.lineAt(selection.head)
+        if (documentIdRef.current) EventBus.emit('editorFocus', { path: documentIdRef.current, offsetUTF16: selection.head })
         onCursorContextRef.current?.({ from: selection.from, to: selection.to, line: line.number, text: line.text })
       }
       if (update.selectionSet) {
@@ -1220,7 +1222,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
             searchText = lineText.substring(wordStart, wordEnd)
           }
 
-          EventBus.emit('forwardSync', { line, lineText: searchText })
+          EventBus.emit('forwardSync', { line, lineText: searchText, filename: compilationContext(documentIdRef.current).mainFile })
         }
       }
 
@@ -2279,7 +2281,7 @@ const LaTeXEditor: React.FC<LaTeXEditorProps> = React.memo(({
     {selectionMenu && <SelectionContextMenu {...selectionMenu}
       onClose={closeSelectionMenu}
       onJump={() => {
-        EventBus.emit('forwardSync', { line: selectionMenu.line, lineText: selectionMenu.text, filename: documentId, reveal: true })
+        EventBus.emit('forwardSync', { line: selectionMenu.line, lineText: selectionMenu.text, filename: compilationContext(documentId).mainFile, reveal: true })
         closeSelectionMenu(true)
       }}
       onCopy={async () => {

@@ -18,6 +18,20 @@ export default function MobileStudio({ editorProps, files, pdfData, syncTexData,
   showPreview: boolean; onPreviewChange: (open: boolean) => void
 }) {
   const api = useRef<MobileEditorApi | null>(null)
+  const previewWarmed = useRef(false)
+  useEffect(() => {
+    if (!pdfData || previewWarmed.current || !import.meta.env.PROD || !('serviceWorker' in navigator)) return
+    previewWarmed.current = true
+    // Prepare the first mobile preview too, even if the user goes offline
+    // before ever opening it. This starts only after the first PDF is ready.
+    void import('./MobilePDFViewer').then(async module => {
+      const registration = await navigator.serviceWorker.ready
+      const assets = performance.getEntriesByType('resource').map(entry => entry.name)
+        .filter(url => new URL(url).origin === location.origin && new URL(url).pathname.startsWith('/assets/'))
+      registration.active?.postMessage({ type: 'CACHE_URLS', urls: [...new Set([module.mobilePdfWorkerUrl, ...assets])] })
+    }).catch(() => { previewWarmed.current = false })
+  }, [pdfData])
+
   const [cursor, setCursor] = useState(emptyCursor)
   const [expanded, setExpanded] = useState(false)
   const [peek, setPeek] = useState(false)
