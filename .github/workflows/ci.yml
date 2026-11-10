@@ -82,3 +82,6 @@ jobs:
 
       - name: Build the local preview
         run: bun run build:local
+
+      - name: Build the production bundle
+        run: bun run build
