@@ -308,6 +308,41 @@ function updateMemoryViews() {
 var wasmTable;
 // end include: runtime_init_table.js
 // include: runtime_stack_check.js
+// Initializes the stack cookie. Called at the startup of main and at the startup of each thread in pthreads mode.
+function writeStackCookie() {
+  var max = _emscripten_stack_get_end();
+  // If the stack ends at address zero we write our cookies 4 bytes into the
+  // stack.  This prevents interference with SAFE_HEAP and ASAN which also
+  // monitor writes to address zero.
+  if (max == 0) {
+    max += 4;
+  }
+  // The stack grow downwards towards _emscripten_stack_get_end.
+  // We write cookies to the final two words in the stack and detect if they are
+  // ever overwritten.
+  HEAPU32[((max)>>2)] = 0x02135467;
+  HEAPU32[(((max)+(4))>>2)] = 0x89BACDFE;
+  // Also test the global address 0 for integrity.
+  HEAPU32[((0)>>2)] = 1668509029;
+}
+
+function checkStackCookie() {
+  if (ABORT) return;
+  var max = _emscripten_stack_get_end();
+  // See writeStackCookie().
+  if (max == 0) {
+    max += 4;
+  }
+  var cookie1 = HEAPU32[((max)>>2)];
+  var cookie2 = HEAPU32[(((max)+(4))>>2)];
+  if (cookie1 != 0x02135467 || cookie2 != 0x89BACDFE) {
+    abort(`Stack overflow! Stack cookie has been overwritten at ${ptrToString(max)}, expected hex dwords 0x89BACDFE and 0x2135467, but received ${ptrToString(cookie2)} ${ptrToString(cookie1)}`);
+  }
+  // Also test the global address 0 for integrity.
+  if (HEAPU32[((0)>>2)] != 0x63736d65 /* 'emsc' */) {
+    abort('Runtime error: The application has corrupted its heap memory area (address zero)!');
+  }
+}
 // end include: runtime_stack_check.js
 // include: runtime_assertions.js
 // end include: runtime_assertions.js
@@ -338,6 +373,10 @@ function preRun() {
 function initRuntime() {
   runtimeInitialized = true;
 
+  checkStackCookie();
+
+  setStackLimits();
+
   SOCKFS.root = FS.mount(SOCKFS, {}, null);
 
 if (!Module["noFSInit"] && !FS.init.initialized)
@@ -350,11 +389,13 @@ PIPEFS.root = FS.mount(PIPEFS, {}, null);
 }
 
 function preMain() {
+  checkStackCookie();
   
   callRuntimeCallbacks(__ATMAIN__);
 }
 
 function postRun() {
+  checkStackCookie();
 
   if (Module['postRun']) {
     if (typeof Module['postRun'] == 'function') Module['postRun'] = [Module['postRun']];
@@ -698,6 +739,18 @@ function siglum_resolve_input(name,format,must_exist,resolved,capacity) { var ca
     }
   }
 
+  var ptrToString = (ptr) => {
+      // With CAN_ADDRESS_2GB or MEMORY64, pointers are already unsigned.
+      ptr >>>= 0;
+      return '0x' + ptr.toString(16).padStart(8, '0');
+    };
+
+  var setStackLimits = () => {
+      var stackLow = _emscripten_stack_get_base();
+      var stackHigh = _emscripten_stack_get_end();
+      ___set_stack_limits(stackLow, stackHigh);
+    };
+
   
     /**
      * @param {number} ptr
@@ -792,6 +845,16 @@ function siglum_resolve_input(name,format,must_exist,resolved,capacity) { var ca
     };
   var ___assert_fail = (condition, filename, line, func) => {
       abort(`Assertion failed: ${UTF8ToString(condition)}, at: ` + [filename ? UTF8ToString(filename) : 'unknown filename', line, func ? UTF8ToString(func) : 'unknown function']);
+    };
+
+  
+  
+  var ___handle_stack_overflow = (requested) => {
+      var base = _emscripten_stack_get_base();
+      var end = _emscripten_stack_get_end();
+      abort(`stack overflow (Attempt to set SP to ${ptrToString(requested)}` +
+            `, with stack limits [${ptrToString(end)} - ${ptrToString(base)}` +
+            ']). If you require more stack space build with -sSTACK_SIZE=<bytes>');
     };
 
   var initRandomFill = () => {
@@ -6426,6 +6489,12 @@ function siglum_resolve_input(name,format,must_exist,resolved,capacity) { var ca
       if (e instanceof ExitStatus || e == 'unwind') {
         return EXITSTATUS;
       }
+      checkStackCookie();
+      if (e instanceof WebAssembly.RuntimeError) {
+        if (_emscripten_stack_get_current() <= 0) {
+          err('Stack overflow detected.  You can try increasing -sSTACK_SIZE (currently set to 5242880)');
+        }
+      }
       quit_(1, e);
     };
 
@@ -6631,6 +6700,7 @@ ERRNO_CODES = {
     };;
 var wasmImports = {
   __assert_fail: ___assert_fail,
+  __handle_stack_overflow: ___handle_stack_overflow,
   __syscall_connect: ___syscall_connect,
   __syscall_dup: ___syscall_dup,
   __syscall_faccessat: ___syscall_faccessat,
@@ -7081,6 +7151,26 @@ var _setThrew = function() {
 };
 
 /** @type {function(...*):?} */
+var _emscripten_stack_init = function() {
+  return (_emscripten_stack_init = Module['asm']['emscripten_stack_init']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var _emscripten_stack_get_free = function() {
+  return (_emscripten_stack_get_free = Module['asm']['emscripten_stack_get_free']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var _emscripten_stack_get_base = function() {
+  return (_emscripten_stack_get_base = Module['asm']['emscripten_stack_get_base']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var _emscripten_stack_get_end = function() {
+  return (_emscripten_stack_get_end = Module['asm']['emscripten_stack_get_end']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
 var stackSave = function() {
   return (stackSave = Module['asm']['stackSave']).apply(null, arguments);
 };
@@ -7093,6 +7183,16 @@ var stackRestore = function() {
 /** @type {function(...*):?} */
 var stackAlloc = function() {
   return (stackAlloc = Module['asm']['stackAlloc']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var _emscripten_stack_get_current = function() {
+  return (_emscripten_stack_get_current = Module['asm']['emscripten_stack_get_current']).apply(null, arguments);
+};
+
+/** @type {function(...*):?} */
+var ___set_stack_limits = Module['___set_stack_limits'] = function() {
+  return (___set_stack_limits = Module['___set_stack_limits'] = Module['asm']['__set_stack_limits']).apply(null, arguments);
 };
 
 /** @type {function(...*):?} */
@@ -7115,8 +7215,8 @@ var dynCall_jiji = Module['dynCall_jiji'] = function() {
   return (dynCall_jiji = Module['dynCall_jiji'] = Module['asm']['dynCall_jiji']).apply(null, arguments);
 };
 
-var ___start_em_js = Module['___start_em_js'] = 5562320;
-var ___stop_em_js = Module['___stop_em_js'] = 5562563;
+var ___start_em_js = Module['___start_em_js'] = 5562256;
+var ___stop_em_js = Module['___stop_em_js'] = 5562499;
 function invoke_iii(index,a1,a2) {
   var sp = stackSave();
   try {
@@ -7296,11 +7396,22 @@ function callMain(args = []) {
   }
 }
 
+function stackCheckInit() {
+  // This is normally called automatically during __wasm_call_ctors but need to
+  // get these values before even running any of the ctors so we call it redundantly
+  // here.
+  _emscripten_stack_init();
+  // TODO(sbc): Move writeStackCookie to native to to avoid this.
+  writeStackCookie();
+}
+
 function run(args = arguments_) {
 
   if (runDependencies > 0) {
     return;
   }
+
+    stackCheckInit();
 
   preRun();
 
@@ -7342,6 +7453,7 @@ function run(args = arguments_) {
   {
     doRun();
   }
+  checkStackCookie();
 }
 
 if (Module['preInit']) {
